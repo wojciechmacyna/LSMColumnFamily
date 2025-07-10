@@ -1,0 +1,10 @@
+/build
+.vscode/settings.json
+/db
+/obj
+HierarchicalDB
+README.md
+DB.md
+/csv
+/csv2
+/plots*/*.png
