@@ -25,7 +25,7 @@ void DBManager::compactAllColumnFamilies(size_t numRecords) {
   if (!db_) throw std::runtime_error("DB not open");
   rocksdb::CompactRangeOptions opts;
 
-  auto s_enable_del = db_->EnableFileDeletions(true);
+  auto s_enable_del = db_->EnableFileDeletions();
   if (!s_enable_del.ok()) {
       spdlog::warn("Failed to ensure file deletions are enabled: {}. DB size may grow.", s_enable_del.ToString());
   }
