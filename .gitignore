@@ -8,3 +8,5 @@ DB.md
 /csv
 /csv2
 /plots*/*.png
+plots/plots/*.png
+compile_commands.json
