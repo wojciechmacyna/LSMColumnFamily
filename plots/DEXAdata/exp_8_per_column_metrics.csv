@@ -1,0 +1,6 @@
+numRecords,numColumns,multiBloomPerCol,multiLeafPerCol,multiNonLeafPerCol,multiSSTPerCol,singleBloomPerCol,singleLeafPerCol,singleNonLeafPerCol,singleSSTPerCol
+50000000,2,45.73,2,43.72,1,95.45,7.4,88.05,1.22
+50000000,4,27.9,1,26.37,1,93.59,6.69,86.9,1.17
+50000000,6,22.47,1,21.13,1,93.6,6.74,86.86,1.15
+50000000,8,19.71,1,18.47,1,94.03,7.01,87.02,1.15
+50000000,10,18.35,1,17.18,1,92.07,6.51,85.56,1.16

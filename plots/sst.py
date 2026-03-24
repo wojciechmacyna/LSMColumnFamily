@@ -201,7 +201,7 @@ def _partition_efficiency(ax: plt.Axes, data: pd.DataFrame):
 def main():
     """Main function to run the complete analysis."""
     # Use the provided file names
-    data = load_and_prepare_data("data/exp_1_comprehensive_checks_*.csv")
+    data = load_and_prepare_data("sst/exp_1_comprehensive_checks_*.csv")
     
     if not data.empty:
         all_configs = sorted(data['Config'].unique())

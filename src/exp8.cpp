@@ -71,9 +71,9 @@ void writeExp8TimingComparisonHeaders() {
 }
 
 void runExp8(std::string baseDir, bool initMode, bool skipDbScan) {
-  const int dbSize = 20'000'000;
-  const int maxColumns = 12;
-  const std::vector<int> numColumnsToTest = {2,4,6,8,10,maxColumns};
+  const int dbSize = 50'000'000;
+  const int maxColumns = 10;
+  const std::vector<int> numColumnsToTest = {2,4,6,8,maxColumns};
   
   const std::string fixedDbName = baseDir + "/exp8_shared_db";
   const int numQueriesPerScenario = 100;

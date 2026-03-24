@@ -1,0 +1,5 @@
+dbSize,multiBloomChecks,multiLeafBloomChecks,multiSSTChecks,singleBloomChecks,singleLeafBloomChecks,singleSSTChecks
+10000000,45,7,3,41.5,17.5,1.5
+50000000,184.1,9.2,3,194,76.5,2.5
+100000000,358.3,10,3,375,138,3.3
+500000000,2005.1,24.8,2.7,1924.6,747,12.7

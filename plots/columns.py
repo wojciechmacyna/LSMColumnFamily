@@ -253,7 +253,7 @@ def create_summary_table(df: pd.DataFrame):
 def main():
     """Main function to run the complete analysis and plotting script."""
     Path("plots/columns").mkdir(parents=True, exist_ok=True)
-    data_file = "data/exp_8_timing_comparison.csv"
+    data_file = "DEXAdata/exp_8_timing_comparison.csv"
     df_timing = load_and_prepare_data(data_file)
 
     if df_timing is not None and not df_timing.empty:

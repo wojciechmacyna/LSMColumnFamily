@@ -1,0 +1,6 @@
+numRecords,numColumns,multiBloomChecks,multiLeafBloomChecks,multiSSTChecks,singleBloomChecks,singleLeafBloomChecks,singleSSTChecks
+50000000,2,91.98,4.02,2,95.45,7.4,1.22
+50000000,4,113.05,6,4,93.59,6.69,1.17
+50000000,6,137.29,8,6,93.6,6.74,1.15
+50000000,8,161.29,10,8,94.03,7.01,1.15
+50000000,10,187.98,12.02,10,92.07,6.51,1.16

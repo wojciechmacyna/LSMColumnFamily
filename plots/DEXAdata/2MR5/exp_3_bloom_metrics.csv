@@ -1,0 +1,8 @@
+numRecords,bloomCreationTime,dbCreationTime
+10000000,56458,43221666
+numRecords,bloomCreationTime,dbCreationTime
+50000000,69693,211810395
+numRecords,bloomCreationTime,dbCreationTime
+100000000,90928,423353536
+numRecords,bloomCreationTime,dbCreationTime
+500000000,210574,2110000532

@@ -52,7 +52,7 @@ def load_validation_data():
     data = []
     
     # Load comprehensive analysis files
-    comp_files = glob.glob("data/exp_1_mixed_query_summary_*.csv")
+    comp_files = glob.glob("bestcase/exp_1_mixed_query_summary_*.csv")
     
     for file_path in comp_files:
         config = extract_config_from_filename(file_path)
