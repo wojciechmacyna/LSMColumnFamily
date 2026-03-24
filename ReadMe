@@ -1,0 +1,21 @@
+Implementation:
+https://github.com/wojciechmacyna/LSMColumnFamily
+
+
+Experiments:
+
+In main : 
+
+exp1 should be executed for different parameters. It is reflected in :
+
+TestParams params = {dbName, dbSize, 5, 1, 100000, 4'000'000, 3};
+
+in this case 5 is an Bloom filter hierqarchy order and 4M is a Bloom filter size.
+
+It was tested for: (5, 4M), (3, 4M), (5, 2M), (5, 1M)
+
+Running for the first parameter set creates all databases.
+
+Plots:
+
+Copy the csv files to subdirectories: bestcase and sst (changing name is required)
