@@ -1,0 +1,2 @@
+numRecords,bloomSize,numColumns,multiBloomPerCol,multiLeafPerCol,multiNonLeafPerCol,multiSSTPerCol
+50000000,2000000,3,62.44,1.02,60.78,1

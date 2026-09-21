@@ -786,9 +786,11 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     isRealDataQuery[i] = true;
   }
 
-  // Shuffle
-  std::random_device rd;
-  std::mt19937 generator(rd());
+  // Shuffle (changed)
+  //std::random_device rd;
+  //std::mt19937 generator(rd());
+
+  std::mt19937 generator(123456789);
   std::shuffle(isRealDataQuery.begin(), isRealDataQuery.end(), generator);
 
   std::uniform_int_distribution<size_t> distribution(1, dbSize);

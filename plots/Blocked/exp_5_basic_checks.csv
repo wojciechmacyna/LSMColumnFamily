@@ -1,0 +1,12 @@
+numRecords,itemsPerPartition,multiBloomChecks,multiLeafBloomChecks,multiSSTChecks,singleBloomChecks,singleLeafBloomChecks,singleSSTChecks
+numRecords,itemsPerPartition,multiBloomChecks,multiLeafBloomChecks,multiSSTChecks,singleBloomChecks,singleLeafBloomChecks,singleSSTChecks
+numRecords,itemsPerPartition,multiBloomChecks,multiLeafBloomChecks,multiSSTChecks,singleBloomChecks,singleLeafBloomChecks,singleSSTChecks
+numRecords,itemsPerPartition,multiBloomChecks,multiLeafBloomChecks,multiSSTChecks,singleBloomChecks,singleLeafBloomChecks,singleSSTChecks
+numRecords,itemsPerPartition,multiBloomChecks,multiLeafBloomChecks,multiSSTChecks,singleBloomChecks,singleLeafBloomChecks,singleSSTChecks
+50000000,100000,100.49,5.02,3,93.34,6.75,1.11
+50000000,150000,103.84,5.02,3,94.29,10.32,1.42
+50000000,200000,100.28,5.03,3,92.66,14.36,1.69
+numRecords,itemsPerPartition,multiBloomChecks,multiLeafBloomChecks,multiSSTChecks,singleBloomChecks,singleLeafBloomChecks,singleSSTChecks
+50000000,100000,102.38,5,3,94.71,7.17,1.23
+50000000,150000,104.1,5.04,3,92.94,10.31,1.33
+50000000,200000,100.62,5.04,3,93.88,15.07,1.75

@@ -1,0 +1,2 @@
+numRecords,bloomSize,falsePositiveProbability,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime
+50000000,2000000,0.00270258,2.6402e+06,45262.1,47078.4

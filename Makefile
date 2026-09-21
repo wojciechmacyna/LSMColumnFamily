@@ -1,10 +1,48 @@
+#make clean
+#make BLOOM_IMPL=standard
+#make BLOOM_IMPL=blocked
+
+
+# ============================================================
 # Variables
+# ============================================================
+
 CXX = clang++
 
-CXXFLAGS = -std=c++20  -I/usr/local/include/rocksdb -Iinclude -Ibloom -I/usr/include/spdlog
-LDFLAGS = -L/usr/local/lib  -lz -lbz2 -lsnappy -llz4 -lzstd -pthread -ldl -fvisibility=hidden -fvisibility-inlines-hidden -lrocksdb -lfmt -lboost_system -lboost_thread
+CXXFLAGS = -std=c++20 -I/usr/local/include/rocksdb -Iinclude -Ibloom -I/usr/include/spdlog
+
+LDFLAGS = -L/usr/local/lib -lz -lbz2 -lsnappy -llz4 -lzstd -pthread -ldl \
+          -fvisibility=hidden -fvisibility-inlines-hidden \
+          -lrocksdb -lfmt -lboost_system -lboost_thread
 
 TARGET = HierarchicalDB
+
+
+# ============================================================
+# Bloom filter implementation
+# ============================================================
+
+BLOOM_IMPL ?= standard
+
+ifeq ($(BLOOM_IMPL),standard)
+
+    BLOOM_SRC = bloom/bloom_value.cpp
+
+else ifeq ($(BLOOM_IMPL),blocked)
+
+    BLOOM_SRC = bloom/blocked_bloom_filter.cpp
+
+else
+
+    $(error Unknown BLOOM_IMPL='$(BLOOM_IMPL)'. Use standard or blocked)
+
+endif
+
+
+# ============================================================
+# Source files
+# ============================================================
+
 SRC = \
     src/db_manager.cpp \
     src/bloom_manager.cpp \
@@ -19,30 +57,51 @@ SRC = \
     src/exp8.cpp \
     src/exp_utils.cpp \
     bloom/bloomTree.cpp \
-    bloom/bloom_value.cpp \
     bloom/node.cpp \
-    bloom/MurmurHash3.cpp
+    bloom/MurmurHash3.cpp \
+    $(BLOOM_SRC)
 
-# Convert source files to object files
+
+# ============================================================
+# Object files
+# ============================================================
+
 OBJ_DIR = obj
+
 OBJ = $(SRC:%.cpp=$(OBJ_DIR)/%.o)
 
+
+# ============================================================
 # Create object directories
+# ============================================================
+
 $(shell mkdir -p $(sort $(dir $(OBJ))))
 
+
+# ============================================================
 # Build target
+# ============================================================
+
 $(TARGET): $(OBJ)
 	$(CXX) -fno-rtti -o $@ $^ $(LDFLAGS)
 
-# Pattern rule for object files
+
+# ============================================================
+# Compile .cpp -> .o
+# ============================================================
+
 $(OBJ_DIR)/%.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Clean target
+
+# ============================================================
+# Clean
+# ============================================================
+
 clean:
 	rm -f $(TARGET)
 	rm -rf $(OBJ_DIR)
 	rm -rf db
 
-.PHONY: clean
 
+.PHONY: clean

@@ -73,7 +73,8 @@ void writeExp5TimingComparisonHeaders() {
 void runExp5(const std::string& dbPath, size_t dbSizeParam, bool skipDbScan) {
   const std::vector<std::string> columns = {"phone", "mail", "address"};
   const size_t bloomFilterSize = 4'000'000;
-  const std::vector<size_t> itemsPerPartitionVec = {100000, 150000, 200000};
+  //const std::vector<size_t> itemsPerPartitionVec = {100000, 150000, 200000};
+  const std::vector<size_t> itemsPerPartitionVec = {100000};
   const int numQueryRuns = 100;
 
   // Initialize CSV headers

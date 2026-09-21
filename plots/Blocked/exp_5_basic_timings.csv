@@ -1,0 +1,12 @@
+numRecords,itemsPerPartition,falsePositiveProbability,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime
+numRecords,itemsPerPartition,falsePositiveProbability,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime
+numRecords,itemsPerPartition,falsePositiveProbability,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime
+numRecords,itemsPerPartition,falsePositiveProbability,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime
+numRecords,itemsPerPartition,falsePositiveProbability,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime
+50000000,100000,0.000377252,3.36808e+06,76032.8,91153.2
+50000000,150000,0.00120464,3.38255e+06,103551,124251
+50000000,200000,0.00270258,5.65731e+06,140902,159598
+numRecords,itemsPerPartition,falsePositiveProbability,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime
+50000000,100000,0.000377252,2.71818e+06,42205.9,45118.1
+50000000,150000,0.00120464,2.78599e+06,60059.3,59401.5
+50000000,200000,0.00270258,2.73664e+06,88840.3,94065.3

@@ -136,9 +136,12 @@ static size_t computeNodeMemory(const Node* node) {
     if (!node) return 0;
     size_t mem = 0;
 
-    mem += node->bloom.bitArray.capacity() / CHAR_BIT;
-    mem += sizeof(node->bloom.bitArray);
+    //mem += node->bloom.bitArray.capacity() / CHAR_BIT;
+    //mem += sizeof(node->bloom.bitArray);
+    
+    mem += node->bloom.memoryBytes();
 
+    
     for (const Node* child : node->children) {
         mem += computeNodeMemory(child);
     }

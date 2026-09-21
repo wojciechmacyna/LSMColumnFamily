@@ -87,7 +87,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
   writeExp1TimingComparisonHeaders();
 
   const std::vector<std::string> columns = {"phone", "mail", "address"};
-  const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 50'000'000, 500'000'000};
+  const std::vector<int> dbSizes = {10'000'000, defaultNumRecords};
 
   DBManager dbManager;
   BloomManager bloomManager;

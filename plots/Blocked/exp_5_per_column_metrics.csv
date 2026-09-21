@@ -1,0 +1,12 @@
+numRecords,itemsPerPartition,numColumns,multiBloomPerCol,multiLeafPerCol,multiNonLeafPerCol,multiSSTPerCol
+numRecords,itemsPerPartition,numColumns,multiBloomPerCol,multiLeafPerCol,multiNonLeafPerCol,multiSSTPerCol
+numRecords,itemsPerPartition,numColumns,multiBloomPerCol,multiLeafPerCol,multiNonLeafPerCol,multiSSTPerCol
+numRecords,itemsPerPartition,numColumns,multiBloomPerCol,multiLeafPerCol,multiNonLeafPerCol,multiSSTPerCol
+numRecords,itemsPerPartition,numColumns,multiBloomPerCol,multiLeafPerCol,multiNonLeafPerCol,multiSSTPerCol
+50000000,100000,3,33.17,1.01,31.47,1
+50000000,150000,3,34.23,1.02,32.64,1
+50000000,200000,3,33.08,1.02,31.45,1
+numRecords,itemsPerPartition,numColumns,multiBloomPerCol,multiLeafPerCol,multiNonLeafPerCol,multiSSTPerCol
+50000000,100000,3,33.76,1,32.16,1
+50000000,150000,3,34.4,1.04,32.7,1
+50000000,200000,3,33.19,1.02,31.5,1

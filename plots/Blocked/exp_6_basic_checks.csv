@@ -1,0 +1,2 @@
+numRecords,bloomSize,multiBloomChecks,multiLeafBloomChecks,multiSSTChecks,singleBloomChecks,singleLeafBloomChecks,singleSSTChecks
+50000000,2000000,188.34,5.02,3,181.33,26.86,2.32
