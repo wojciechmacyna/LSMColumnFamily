@@ -21,6 +21,7 @@
 #include "exp6.hpp"
 #include "exp7.hpp"
 #include "exp8.hpp"
+#include "expJ1.hpp"
 #include "stopwatch.hpp"
 #include "test_params.hpp"
 
@@ -75,14 +76,15 @@ int main(int argc, char* argv[]) {
 
   try {
     // run section- test
-    // runExp1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    //runExp1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     // EXP 2 included in exp5 run
     // EXP 3 included in exp1 first run (creating DB)
     // EXP 4 included in exp1 first run (running queries)
-    runExp5(sharedDbName, defaultNumRecords, skipDbScan);
-    runExp6(sharedDbName, defaultNumRecords, skipDbScan);
+    //runExp5(sharedDbName, defaultNumRecords, skipDbScan);
+    //runExp6(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp7(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp8(baseDir, initMode, skipDbScan);
+    runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
   } catch (const std::exception& e) {
     spdlog::error("[Error] {}", e.what());
     return EXIT_FAILURE;

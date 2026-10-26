@@ -578,7 +578,7 @@ void testPatternGeneration() {
 
 std::vector<PatternQueryResult> runPatternQueriesWithCsvData(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
-    const std::vector<std::string>& columns, size_t dbSize) {
+    const std::vector<std::string>& columns, size_t dbSize, const DistributionConfig& config) {
   std::vector<PatternQueryResult> results;
 
   // Setup query trees
@@ -631,8 +631,25 @@ std::vector<PatternQueryResult> runPatternQueriesWithCsvData(
 
   std::random_device rd;
   std::mt19937 generator(rd());
-  std::uniform_int_distribution<size_t> distribution(1, dbSize);
+  
+  // Previous implementation
+  // std::uniform_int_distribution<size_t> distribution(1, dbSize);
 
+  // New implementation: Normal distribution takes from all values in db
+  // Ziphian only from the inserted values (values in Ziphian can be repeated.)
+
+  size_t cardinality=0;
+  if (config.type == DataDistribution::Normal) {
+    cardinality=dbSize;
+  }
+  else {
+    cardinality =
+      std::max<size_t>(1, std::min(config.cardinality, dbSize));
+  }
+
+  std::uniform_int_distribution<size_t> distribution(1, cardinality);
+ 
+  
   StopWatch stopwatch;
   std::vector<std::string> currentExpectedValues;
   results.reserve(patterns.size());
@@ -735,7 +752,7 @@ std::vector<PatternQueryResult> runPatternQueriesWithCsvData(
 std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
     const std::vector<std::string>& columns, size_t dbSize, int numQueries, 
-    double realDataPercentage) {
+    double realDataPercentage, const DistributionConfig& config) {
   std::vector<MixedQueryResult> results;
 
   // Setup query trees
@@ -791,7 +808,27 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
   std::mt19937 generator(rd());
   std::shuffle(isRealDataQuery.begin(), isRealDataQuery.end(), generator);
 
-  std::uniform_int_distribution<size_t> distribution(1, dbSize);
+
+  // Previous implementation
+  ///std::uniform_int_distribution<size_t> distribution(1, dbSize);
+
+// New implementation: Normal distribution takes from all values in db
+  // Ziphian only from the inserted values (values in Ziphian can be repeated.)
+  
+  size_t cardinality=0;
+  if (config.type == DataDistribution::Normal) {
+    cardinality=dbSize;
+  }
+  else {
+    cardinality =
+      std::max<size_t>(1, std::min(config.cardinality, dbSize));
+  }
+
+  std::uniform_int_distribution<size_t> distribution(1, cardinality);
+
+
+
+
   StopWatch stopwatch;
   std::vector<std::string> currentExpectedValues;
   results.reserve(numQueries);
@@ -904,7 +941,7 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
 
 std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
-    const std::vector<std::string>& columns, size_t dbSize, int numQueriesPerScenario) {
+    const std::vector<std::string>& columns, size_t dbSize, int numQueriesPerScenario, const DistributionConfig& config) {
   
   std::vector<AccumulatedQueryMetrics> accumulatedResults;
   
@@ -919,7 +956,7 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     
     // Run mixed queries for this percentage
     std::vector<MixedQueryResult> results = runMixedQueriesWithCsvData(
-        dbManager, hierarchies, columns, dbSize, numQueriesPerScenario, percentage);
+        dbManager, hierarchies, columns, dbSize, numQueriesPerScenario, percentage, config);
     
     if (results.empty()) {
       spdlog::warn("No results returned for {}% real data scenario", percentage);

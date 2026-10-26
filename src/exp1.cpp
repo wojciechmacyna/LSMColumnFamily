@@ -76,7 +76,7 @@ void writeExp1TimingComparisonHeaders() {
 }
 
 void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
-             int defaultNumRecords, bool skipDbScan) {
+             int defaultNumRecords, bool skipDbScan, const DistributionConfig& config) {
   writeCsvHeaders();
   writeExp1BasicMetricsHeaders();
   writeExp1BasicChecksHeaders();
@@ -87,7 +87,8 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
   writeExp1TimingComparisonHeaders();
 
   const std::vector<std::string> columns = {"phone", "mail", "address"};
-  const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 50'000'000, 500'000'000};
+  //const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 50'000'000, 500'000'000};
+  const std::vector<int> dbSizes = {defaultNumRecords};
 
   DBManager dbManager;
   BloomManager bloomManager;
@@ -98,7 +99,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
                              ? sharedDbName
                              : baseDir + "/exp1_db_" + std::to_string(dbSize);
     TestParams params = {dbName, dbSize, 3, 1, 100000, 4'000'000, 3};
-    spdlog::info("ExpBloomMetrics: Rozpoczynam eksperyment dla bazy '{}'",
+    spdlog::info("ExpBloomMetrics: Starting the experiment for the database: '{}'",
                  params.dbName);
     clearBloomFilterFiles(params.dbName);
 
@@ -110,7 +111,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
       dbManager.openDB(params.dbName, columns);
     } else {
       dbManager.openDB(params.dbName, columns);
-      dbManager.insertRecords(params.numRecords, columns);
+      dbManager.insertRecords(params.numRecords, columns, config);
       try {
         dbManager.compactAllColumnFamilies(params.numRecords);
       } catch (const std::exception& e) {
@@ -149,7 +150,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
         << hierarchies.at(columns[0]).leafNodes.size() << ","
         << totalDiskBloomSize << "," << totalMemoryBloomSize << "\n";
     out.close();
-    spdlog::info("ExpBloomMetrics: Eksperyment dla bazy '{}' zakończony.",
+    spdlog::info("ExpBloomMetrics: Experiment for database '{}' finished.",
                  params.dbName);
     writeCsvExp3Headers();
     std::ofstream outExp3("csv/exp_3_bloom_metrics.csv", std::ios::app);
@@ -192,7 +193,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     // Then run pattern-based queries
     spdlog::info("ExpBloomMetrics: Running pattern-based queries for {} columns", columns.size());
     std::vector<PatternQueryResult> results = runPatternQueriesWithCsvData(
-        dbManager, hierarchies, columns, dbSize);
+        dbManager, hierarchies, columns, dbSize, config);
     
     spdlog::info("ExpBloomMetrics: Generated {} pattern results for {} columns", 
                  results.size(), columns.size());
@@ -216,7 +217,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     spdlog::info("ExpBloomMetrics: Running comprehensive analysis for {} columns with {} queries per scenario", 
                  columns.size(), numQueriesPerScenario);
     std::vector<AccumulatedQueryMetrics> comprehensiveResults = runComprehensiveQueryAnalysis(
-        dbManager, hierarchies, columns, dbSize, numQueriesPerScenario);
+        dbManager, hierarchies, columns, dbSize, numQueriesPerScenario, config);
     
     spdlog::info("ExpBloomMetrics: Generated {} comprehensive analysis results for {} columns", 
                  comprehensiveResults.size(), columns.size());
@@ -271,6 +272,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     timing_comparison.close();
     comprehensive_checks.close();
     per_column_stats.close();
+
 
     // Keep exp_4_query_timings.csv for backwards compatibility
     std::ofstream outExp4("csv/exp_4_query_timings.csv", std::ios::app);

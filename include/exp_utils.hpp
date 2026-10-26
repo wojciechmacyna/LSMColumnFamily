@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "test_params.hpp"
+#include "db_manager.hpp"
 
 // Forward declarations
 class DBManager;
@@ -189,18 +190,18 @@ void testPatternGeneration();
 // Function to run pattern queries and collect individual results
 std::vector<PatternQueryResult> runPatternQueriesWithCsvData(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
-    const std::vector<std::string>& columns, size_t dbSize);
+    const std::vector<std::string>& columns, size_t dbSize, const DistributionConfig& config = {});
 
 // Function to run N queries with X% real data and (100-X)% false data
 std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
     const std::vector<std::string>& columns, size_t dbSize, int numQueries, 
-    double realDataPercentage);
+    double realDataPercentage, const DistributionConfig& config = {});
 
 // Function to run comprehensive analysis across multiple real data percentages
 std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
-    const std::vector<std::string>& columns, size_t dbSize, int numQueriesPerScenario);
+    const std::vector<std::string>& columns, size_t dbSize, int numQueriesPerScenario, const DistributionConfig& config = {});
 
 void writeCsvHeader(const std::string& filename, const std::string& headerLine);
 

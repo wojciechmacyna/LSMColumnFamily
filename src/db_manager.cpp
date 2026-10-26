@@ -16,8 +16,14 @@
 #include <stdexcept>
 #include <unordered_set>
 
+#include <algorithm>
+#include <cmath>
+
+
 #include "algorithm.hpp"
 #include "stopwatch.hpp"
+
+
 
 extern boost::asio::thread_pool globalThreadPool;
 
@@ -25,7 +31,7 @@ void DBManager::compactAllColumnFamilies(size_t numRecords) {
   if (!db_) throw std::runtime_error("DB not open");
   rocksdb::CompactRangeOptions opts;
 
-  auto s_enable_del = db_->EnableFileDeletions();
+  auto s_enable_del = db_->EnableFileDeletions(true);
   if (!s_enable_del.ok()) {
       spdlog::warn("Failed to ensure file deletions are enabled: {}. DB size may grow.", s_enable_del.ToString());
   }
@@ -122,33 +128,86 @@ void DBManager::openDB(const std::string& dbname,
                    sw.elapsedMicros());
 }
 
-void DBManager::insertRecords(int numRecords,
-                              std::vector<std::string> columns) {
+
+void DBManager::insertRecords(
+    int numRecords,
+    std::vector<std::string> columns,
+    const DistributionConfig& config) {
+
   if (!db_) throw std::runtime_error("DB not open.");
+  if (numRecords < 0)
+    throw std::invalid_argument("numRecords cannot be negative.");
 
   StopWatch sw;
   sw.start();
-  spdlog::info("Inserting {} records across {} CFs...", numRecords,
-               columns.size());
+
+ 
+const char* distributionName =
+    config.type == DataDistribution::Zipfian ? "Zipfian" : "Normal";
+
+
+  spdlog::info(
+      "Inserting {} records across {} CFs using {} distribution...",
+      numRecords, columns.size(), distributionName);
+
+  // Initialize Zipfian generator only when needed.
+  const double zipfExponent = config.exponent;
+  const size_t maxZipfCardinality = config.cardinality;
+
+  std::mt19937_64 rng(12345);
+  std::vector<double> weights;
+  std::discrete_distribution<size_t> zipfDist;
+
+  if (config.type == DataDistribution::Zipfian && numRecords > 0) {
+    const size_t cardinality = std::min(
+        static_cast<size_t>(numRecords),
+        maxZipfCardinality);
+
+    weights.reserve(cardinality);
+
+    for (size_t rank = 1; rank <= cardinality; ++rank) {
+      weights.push_back(
+          1.0 / std::pow(static_cast<double>(rank), zipfExponent));
+    }
+
+    zipfDist = std::discrete_distribution<size_t>(
+        weights.begin(), weights.end());
+  }
 
   rocksdb::WriteBatch batch;
+
   for (int i = 1; i <= numRecords; ++i) {
-    // prefix index with 0s to ensure lexicographical order based on numRecords
-    // size
     const std::string index = std::to_string(i);
+
     const std::string prefixedIndex =
-        std::string(20 - index.size(), '0') + std::to_string(i);
+        std::string(20 - index.size(), '0') + index;
 
     const std::string key = "key" + prefixedIndex;
+
     for (const auto& column : columns) {
-      const std::string value = column + "_value" + index;
+      std::string value;
+
+      if (config.type == DataDistribution::Zipfian) {
+        // Rank 1 is the most frequent value.
+        const size_t rank = zipfDist(rng) + 1;
+
+        value = column + "_value" + std::to_string(rank);
+      } else {
+        // Original behavior: every record has a distinct value.
+        value = column + "_value" + index;
+      }
+
       auto handle = cf_handles_.at(column).get();
       batch.Put(handle, key, value);
     }
+
     if (i % 1000000 == 0) {
       auto s = db_->Write(rocksdb::WriteOptions(), &batch);
+
       if (!s.ok())
-        throw std::runtime_error("Batch write failed: " + s.ToString());
+        throw std::runtime_error(
+            "Batch write failed: " + s.ToString());
+
       batch.Clear();
       spdlog::debug("Inserted {} records...", i);
     }
@@ -156,20 +215,30 @@ void DBManager::insertRecords(int numRecords,
 
   if (batch.Count() > 0) {
     auto s = db_->Write(rocksdb::WriteOptions(), &batch);
+
     if (!s.ok())
-      throw std::runtime_error("Final batch write failed: " + s.ToString());
+      throw std::runtime_error(
+          "Final batch write failed: " + s.ToString());
   }
 
   for (const auto& column : columns) {
     auto handle = cf_handles_.at(column).get();
     auto s = db_->Flush(rocksdb::FlushOptions(), handle);
-    if (!s.ok()) throw std::runtime_error("Flush failed: " + s.ToString());
+
+    if (!s.ok())
+      throw std::runtime_error(
+          "Flush failed: " + s.ToString());
   }
 
   sw.stop();
-  spdlog::critical("Inserted {} records across CFs in {} µs.", numRecords,
-                   sw.elapsedMicros());
+
+  spdlog::critical(
+      "Inserted {} records across CFs using {} distribution in {} µs.",
+      numRecords, distributionName, sw.elapsedMicros());
 }
+
+
+
 
 void DBManager::insertRecordsWithSearchTargets(
     int numRecords, const std::vector<std::string>& columns,

@@ -13,12 +13,30 @@
 
 #include "bloomTree.hpp"
 
+enum class DataDistribution {
+  Normal,
+  Zipfian
+};
+
+struct DistributionConfig {
+    DataDistribution type = DataDistribution::Normal;
+
+    // Zipfian parameters
+    size_t cardinality = 10000;
+    double exponent = 1.0;
+
+    // Reproducibility
+    uint64_t seed = 12345;
+};
+
 class DBManager {
  public:
   void compactAllColumnFamilies(size_t numRecords = 0);
   void openDB(const std::string &dbname,
               std::vector<std::string> columns = {"phone", "mail", "address"});
-  void insertRecords(int numRecords, std::vector<std::string> columns);
+  void insertRecords(int numRecords, std::vector<std::string> columns, 
+     const DistributionConfig& config = {});
+
   void insertRecordsWithSearchTargets(
       int numRecords, const std::vector<std::string> &columns,
       const std::unordered_set<int> &targetIndices);
