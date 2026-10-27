@@ -174,7 +174,7 @@ AggregatedQueryTimings runStandardQueries(
     size_t dbSizeForExpectedValues,  // This might need to become a list or
                                      // generate multiple values
     int numRuns = 10,  // Added numRuns parameter with a default value
-    bool skipDbScan = false);
+    bool skipDbScan = false, const DistributionConfig& config = {});
 
 AggregatedQueryTimings runStandardQueriesWithTarget(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,

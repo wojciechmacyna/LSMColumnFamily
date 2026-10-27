@@ -157,7 +157,7 @@ CountStatistics calculateCountStatistics(const std::vector<T>& values) {
 AggregatedQueryTimings runStandardQueries(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
     const std::vector<std::string>& columns, size_t dbSize, int numRuns,
-    bool skipDbScan) {
+    bool skipDbScan, const DistributionConfig& config) {
   AggregatedQueryTimings aggregated_timings;
   if (numRuns <= 0) {
     spdlog::warn(
@@ -222,7 +222,24 @@ AggregatedQueryTimings runStandardQueries(
 
   std::random_device rd;
   std::mt19937 generator(rd());
-  std::uniform_int_distribution<size_t> distribution(1, dbSize);
+
+ // Prev implementation
+  //std::uniform_int_distribution<size_t> distribution(1, dbSize);
+
+
+  // New implementation: Normal distribution takes from all values in db
+  // Ziphian only from the inserted values (values in Ziphian can be repeated.)
+
+  size_t cardinality=0;
+  if (config.type == DataDistribution::Normal) {
+    cardinality=dbSize;
+  }
+  else {
+    cardinality =
+      std::max<size_t>(1, std::min(config.cardinality, dbSize));
+  }
+
+  std::uniform_int_distribution<size_t> distribution(1, cardinality);
 
   StopWatch stopwatch;
   std::vector<std::string> currentExpectedValues;

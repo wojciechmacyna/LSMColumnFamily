@@ -165,7 +165,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
 
     // Run standard queries first
     AggregatedQueryTimings timings = runStandardQueries(
-        dbManager, hierarchies, columns, dbSize, 10, skipDbScan);
+        dbManager, hierarchies, columns, dbSize, 10, skipDbScan, config);
 
     // Write basic metrics - timings only (4 columns)
     std::ofstream basic_metrics("csv/exp_1_basic_metrics.csv", std::ios::app);
