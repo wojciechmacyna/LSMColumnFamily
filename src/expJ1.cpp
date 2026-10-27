@@ -1,4 +1,5 @@
-
+#include <vector>
+#include <algorithm>
 #include <string>
 #include <filesystem>
 
@@ -9,15 +10,19 @@
 void runExpJ1(std::string baseDir, bool initMode, std::string sharedDbName,
              int defaultNumRecords, bool skipDbScan){
 
-        DistributionConfig config;
-        config.type = DataDistribution::Zipfian;
-        config.cardinality = 5000000;
-        config.exponent = 1.0;
 
         namespace fs = std::filesystem;
+        DistributionConfig config;
+        config.type = DataDistribution::Zipfian;
+        config.exponent = 1.0;
 
-        fs::remove_all(sharedDbName);
+        const std::vector<double> capacityPercentages = {5.0, 10.0, 25.0, 50.0};
 
-        runExp1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan, config);
+        for (const double percentage : capacityPercentages)
+        {
+            config.cardinality = std::max<size_t>(1,static_cast<size_t>(defaultNumRecords * percentage / 100.0));
+            fs::remove_all(sharedDbName);
+            runExp1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan, config);
+        };
 
 }
