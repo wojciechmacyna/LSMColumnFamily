@@ -22,7 +22,7 @@ struct DistributionConfig {
     DataDistribution type = DataDistribution::Normal;
 
     // Zipfian parameters
-    size_t cardinality = 10000;
+    size_t cardinality = 0;
     double exponent = 1.0;
 
     // Reproducibility

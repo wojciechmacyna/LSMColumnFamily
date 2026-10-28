@@ -844,8 +844,6 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
   std::uniform_int_distribution<size_t> distribution(1, cardinality);
 
 
-
-
   StopWatch stopwatch;
   std::vector<std::string> currentExpectedValues;
   results.reserve(numQueries);

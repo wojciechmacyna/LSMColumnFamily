@@ -69,9 +69,16 @@ void writeExp1MixedQueryHeaders() {
 
 void writeExp1TimingComparisonHeaders() {
   writeCsvHeader("csv/exp_1_timing_comparison.csv",
-                 "dbSize,realDataPercentage,"
+                 "dbSize,realDataPercentage,cardinality,"
                  "avgRealMultiTime,avgRealSingleTime,"
                  "avgFalseMultiTime,avgFalseSingleTime,"
+                 "avgHierarchicalMultiTime,avgHierarchicalSingleTime");
+}
+
+void writeExpJ1Headers() {
+  writeCsvHeader("csv/expJ1.csv",
+                 "dbSize,realDataPercentage,cardinality,"
+                 "avgRealMultiTime,avgRealSingleTime,"
                  "avgHierarchicalMultiTime,avgHierarchicalSingleTime");
 }
 
@@ -85,6 +92,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
   writeExp1PerColumnHeaders();
   writeExp1MixedQueryHeaders();
   writeExp1TimingComparisonHeaders();
+  writeExpJ1Headers();
 
   const std::vector<std::string> columns = {"phone", "mail", "address"};
   //const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 50'000'000, 500'000'000};
@@ -227,6 +235,9 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     std::ofstream timing_comparison("csv/exp_1_timing_comparison.csv", std::ios::app);
     std::ofstream comprehensive_checks("csv/exp_1_comprehensive_checks.csv", std::ios::app);
     std::ofstream per_column_stats("csv/exp_1_per_column_stats.csv", std::ios::app);
+    std::ofstream expJ1("csv/expJ1", std::ios::app);
+
+
 
     for (const auto& result : comprehensiveResults) {
       // Mixed query summary (8 columns)
@@ -240,10 +251,18 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
 
       // Timing comparison (8 columns)
       if (timing_comparison) {
-        timing_comparison << dbSize << "," << result.realDataPercentage << ","
+        timing_comparison << dbSize << "," << result.realDataPercentage << "," << config.cardinality << "," 
                          << result.avgRealDataMultiTime << "," << result.avgRealDataSingleTime << ","
                          << result.avgFalseDataMultiTime << "," << result.avgFalseDataSingleTime << ","
                          << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "\n";
+      }
+
+
+      if (expJ1){
+        expJ1 << dbSize << "," << result.realDataPercentage << ","
+              << config.cardinality << ","
+              << result.avgRealDataMultiTime << "," << result.avgRealDataSingleTime << ","
+              << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "\n";
       }
 
       // Comprehensive checks (14 columns)
@@ -272,6 +291,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     timing_comparison.close();
     comprehensive_checks.close();
     per_column_stats.close();
+    expJ1.close();
 
 
     // Keep exp_4_query_timings.csv for backwards compatibility

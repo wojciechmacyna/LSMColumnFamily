@@ -10,13 +10,12 @@
 void runExpJ1(std::string baseDir, bool initMode, std::string sharedDbName,
              int defaultNumRecords, bool skipDbScan){
 
-
         namespace fs = std::filesystem;
         DistributionConfig config;
         config.type = DataDistribution::Zipfian;
         config.exponent = 1.0;
 
-        const std::vector<double> capacityPercentages = {5.0, 10.0, 25.0, 50.0};
+        const std::vector<double> capacityPercentages = {1.0, 5.0, 20.0, 50.0};
 
         for (const double percentage : capacityPercentages)
         {
