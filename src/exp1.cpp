@@ -87,7 +87,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
   writeCsvHeaders();
   writeExp1BasicMetricsHeaders();
   writeExp1BasicChecksHeaders();
-  writeExp1PatternTimingsHeaders();
+  //writeExp1PatternTimingsHeaders();
   writeExp1ComprehensiveChecksHeaders();
   writeExp1PerColumnHeaders();
   writeExp1MixedQueryHeaders();
@@ -97,6 +97,12 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
   const std::vector<std::string> columns = {"phone", "mail", "address"};
   //const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 50'000'000, 500'000'000};
   const std::vector<int> dbSizes = {defaultNumRecords};
+
+  // Run stundard queries            
+  const int numStandardQueries = 10;
+
+  // Run comprehensive analysis across different real data percentages
+  const int numQueriesPerScenario = 100;
 
   DBManager dbManager;
   BloomManager bloomManager;
@@ -173,7 +179,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
 
     // Run standard queries first
     AggregatedQueryTimings timings = runStandardQueries(
-        dbManager, hierarchies, columns, dbSize, 10, skipDbScan, config);
+        dbManager, hierarchies, columns, dbSize, numStandardQueries, skipDbScan, config);
 
     // Write basic metrics - timings only (4 columns)
     std::ofstream basic_metrics("csv/exp_1_basic_metrics.csv", std::ios::app);
@@ -198,7 +204,10 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
       basic_checks.close();
     }
 
+ 
+
     // Then run pattern-based queries
+    // This pattern is useless. Only one value goes to the methods
     spdlog::info("ExpBloomMetrics: Running pattern-based queries for {} columns", columns.size());
     std::vector<PatternQueryResult> results = runPatternQueriesWithCsvData(
         dbManager, hierarchies, columns, dbSize, config);
@@ -207,7 +216,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
                  results.size(), columns.size());
 
     // Write pattern results to focused CSV files
-    std::ofstream pattern_timings("csv/exp_1_pattern_timings.csv", std::ios::app);
+    /*std::ofstream pattern_timings("csv/exp_1_pattern_timings.csv", std::ios::app);
 
     for (const auto& result : results) {
       // Pattern timings (4 columns)
@@ -217,10 +226,9 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
                        << result.hierarchicalMultiTime << "\n";
       }
     }
-    pattern_timings.close();
+    pattern_timings.close();*/
 
-    // Run comprehensive analysis across different real data percentages
-    const int numQueriesPerScenario = 100;
+ 
     
     spdlog::info("ExpBloomMetrics: Running comprehensive analysis for {} columns with {} queries per scenario", 
                  columns.size(), numQueriesPerScenario);
@@ -235,8 +243,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     std::ofstream timing_comparison("csv/exp_1_timing_comparison.csv", std::ios::app);
     std::ofstream comprehensive_checks("csv/exp_1_comprehensive_checks.csv", std::ios::app);
     std::ofstream per_column_stats("csv/exp_1_per_column_stats.csv", std::ios::app);
-    std::ofstream expJ1("csv/expJ1", std::ios::app);
-
+    std::ofstream expJ1("csv/expJ1.csv", std::ios::app);
 
 
     for (const auto& result : comprehensiveResults) {
@@ -293,20 +300,6 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     per_column_stats.close();
     expJ1.close();
 
-
-    // Keep exp_4_query_timings.csv for backwards compatibility
-    std::ofstream outExp4("csv/exp_4_query_timings.csv", std::ios::app);
-    if (!outExp4) {
-      spdlog::error(
-          "ExpBloomMetrics: Nie udało się otworzyć pliku wynikowego!");
-      return;
-    }
-    outExp4 << "dbSize,globalScanTime,hierarchicalMultiColumnTime,"
-           "hierarchicalSingleColumnTime\n";
-    outExp4 << dbSize << "," << timings.globalScanTimeStats.average << ","
-        << timings.hierarchicalMultiTimeStats.average << ","
-        << timings.hierarchicalSingleTimeStats.average << "\n";
-    outExp4.close();
 
     dbManager.closeDB();
   }

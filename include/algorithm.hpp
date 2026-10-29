@@ -12,6 +12,8 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <random>
+#include <algorithm>
 
 #include "bloomTree.hpp"
 #include "db_manager.hpp"
@@ -247,4 +249,30 @@ inline std::vector<std::string> multiColumnQueryHierarchical(
       gBloomCheckCount.load(), gLeafBloomCheckCount.load(),
       gSSTCheckCount.load());
   return globalfinalMatches;
+}
+
+
+inline std::discrete_distribution<size_t> zipfDistribution (const double zipfExponent, const size_t maxZipfCardinality, const size_t numRecords){
+  
+
+  std::vector<double> weights;
+  std::discrete_distribution<size_t> zipfDist;
+
+  if (numRecords > 0) {
+    const size_t cardinality = std::min(
+        static_cast<size_t>(numRecords),
+        maxZipfCardinality);
+
+    weights.reserve(cardinality);
+
+    for (size_t rank = 1; rank <= cardinality; ++rank) {
+      weights.push_back(
+          1.0 / std::pow(static_cast<double>(rank), zipfExponent));
+    }
+
+    zipfDist = std::discrete_distribution<size_t>(
+        weights.begin(), weights.end());
+  }
+
+  return zipfDist;
 }

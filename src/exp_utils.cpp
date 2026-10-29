@@ -223,6 +223,7 @@ AggregatedQueryTimings runStandardQueries(
   std::random_device rd;
   std::mt19937 generator(rd());
 
+
  // Prev implementation
   //std::uniform_int_distribution<size_t> distribution(1, dbSize);
 
@@ -240,6 +241,7 @@ AggregatedQueryTimings runStandardQueries(
   }
 
   std::uniform_int_distribution<size_t> distribution(1, cardinality);
+  auto zipfDist = zipfDistribution(config.exponent, cardinality, dbSize);
 
   StopWatch stopwatch;
   std::vector<std::string> currentExpectedValues;
@@ -248,9 +250,17 @@ AggregatedQueryTimings runStandardQueries(
     currentExpectedValues.clear();
     currentExpectedValues.reserve(columns.size());
 
-    size_t currentId = distribution(generator);
+    size_t existingId;
+
+    if (config.type == DataDistribution::Normal) {
+    existingId = distribution(generator);
+    } else {
+      existingId = zipfDist(generator) + 1;
+    }
+
+    //size_t currentId = distribution(generator);
     std::string currentExpectedValueSuffix =
-        "_value" + std::to_string(currentId);
+        "_value" + std::to_string(existingId);
 
     spdlog::info("Run {}: Using expected value suffix: {}", i + 1,
                  currentExpectedValueSuffix);
@@ -841,6 +851,8 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
       std::max<size_t>(1, std::min(config.cardinality, dbSize));
   }
 
+
+  auto zipfDist = zipfDistribution(config.exponent, cardinality, dbSize);
   std::uniform_int_distribution<size_t> distribution(1, cardinality);
 
 
@@ -864,7 +876,15 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
       pattern = patterns[patternIndex];
     }
     
-    size_t randomId = distribution(generator);
+    //size_t randomId = distribution(generator);
+
+    size_t randomId;
+
+    if (config.type == DataDistribution::Normal) {
+      randomId = distribution(generator);
+    } else {
+      randomId = zipfDist(generator) + 1;
+    }
 
     std::string existingValueSuffix = "_value" + std::to_string(randomId);
     std::string nonExistingValueSuffix = "_wrong" + std::to_string(randomId);

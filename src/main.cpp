@@ -76,7 +76,7 @@ int main(int argc, char* argv[]) {
 
   try {
     // run section- test
-    //runExp1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    // runExp1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     // EXP 2 included in exp5 run
     // EXP 3 included in exp1 first run (creating DB)
     // EXP 4 included in exp1 first run (running queries)

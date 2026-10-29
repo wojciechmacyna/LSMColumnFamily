@@ -15,7 +15,9 @@ void runExpJ1(std::string baseDir, bool initMode, std::string sharedDbName,
         config.type = DataDistribution::Zipfian;
         config.exponent = 1.0;
 
-        const std::vector<double> capacityPercentages = {1.0, 5.0, 20.0, 50.0};
+///        const std::vector<double> capacityPercentages = {1.0, 5.0, 20.0, 50.0};
+
+        const std::vector<double> capacityPercentages = {1.0};
 
         for (const double percentage : capacityPercentages)
         {
