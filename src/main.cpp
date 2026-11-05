@@ -22,6 +22,7 @@
 #include "exp7.hpp"
 #include "exp8.hpp"
 #include "expJ1.hpp"
+#include "expJ2.hpp"
 #include "stopwatch.hpp"
 #include "test_params.hpp"
 
@@ -72,7 +73,7 @@ int main(int argc, char* argv[]) {
 
   const std::string sharedDbName = baseDir + "/shared_exp_db";
   const std::vector<std::string> defaultColumns = {"phone", "mail", "address"};
-  const int defaultNumRecords = 50000000;
+  const int defaultNumRecords = 5000000;
 
   try {
     // run section- test
@@ -84,7 +85,8 @@ int main(int argc, char* argv[]) {
     //runExp6(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp7(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp8(baseDir, initMode, skipDbScan);
-    runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    //runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    runExpJ2(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
   } catch (const std::exception& e) {
     spdlog::error("[Error] {}", e.what());
     return EXIT_FAILURE;

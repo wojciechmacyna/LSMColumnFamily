@@ -4,12 +4,18 @@
 #include <string>
 #include <vector>
 #include <boost/asio/thread_pool.hpp>
+#include <memory>
 
 #include "bloomTree.hpp"
 
 extern boost::asio::thread_pool globalThreadPool;
 
+class MyListener;
+
+
 class BloomManager {
+   private:
+    std::shared_ptr<MyListener> listener_;
    public:
     BloomTree createPartitionedHierarchy(const std::vector<std::string>& sstFiles,
                                          size_t partitionSize,

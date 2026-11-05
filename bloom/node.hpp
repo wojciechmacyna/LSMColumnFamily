@@ -10,6 +10,7 @@
 class Node {
    public:
     std::vector<Node*> children;
+    Node* parent = nullptr;
     BloomFilter bloom;
     std::string filename;
     std::string startKey;
@@ -26,5 +27,9 @@ class Node {
         for (const auto& child : children) {
             child->print();
         }
+    }
+
+     bool isLeaf() const {
+        return children.empty();
     }
 };

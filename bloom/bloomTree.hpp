@@ -6,7 +6,7 @@
 
 class BloomTree {
    public:
-    Node* root;
+    Node* root = nullptr;
 
    private:
     int ratio;
@@ -39,8 +39,22 @@ class BloomTree {
 
     std::vector<Node*> leafNodes;
 
+    void insertIntoNode(Node* parent, Node* child);
+    void updateAncestors(Node* node);
+    Node* createParent(Node* child);
+
+    bool validateBloomFilter(const Node* node, std::string& error) const;
+
+    void insertLeaf(
+        BloomFilter&& bloom,
+        const std::string& filename,
+        const std::string& startKey,
+        const std::string& endKey);
+
     void addLeafNode(BloomFilter&& bv, const std::string& file,
                      const std::string& start, const std::string& end);
+
+    void appendLeaves(BloomTree& other);
 
     void buildTree();
 
@@ -58,4 +72,6 @@ class BloomTree {
     void print() const {
         root->print();
     }
+
+    bool validateTree(std::string& error) const;
 };

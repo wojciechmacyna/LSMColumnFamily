@@ -10,6 +10,10 @@
 #include <iostream>
 #include <stdexcept>
 
+#include <functional>
+#include <unordered_set>
+#include <algorithm>
+
 extern std::atomic<size_t> gBloomCheckCount;  // declared in algorithm.hpp
 extern std::atomic<size_t> gLeafBloomCheckCount;  // declared in algorithm.hpp
 
@@ -18,7 +22,191 @@ void BloomTree::addLeafNode(BloomFilter&& bv, const std::string& file,
     leafNodes.push_back(new Node(std::move(bv), file, start, end));
 }
 
-void BloomTree::buildLevel(std::vector<Node*>& nodes) {
+
+bool BloomTree::validateBloomFilter(
+    const Node* node,
+    std::string& error) const
+{
+    if (!node || node->isLeaf()) {
+        return true;
+    }
+
+    BloomFilter expected(
+        node->bloom.bitArraySize,
+        node->bloom.numHashFunctions
+    );
+
+    for (const Node* child : node->children) {
+        if (!child) {
+            error = "Null child";
+            return false;
+        }
+
+        if (child->bloom.bitArraySize != expected.bitArraySize ||
+            child->bloom.numHashFunctions != expected.numHashFunctions) {
+            error = "Incompatible Bloom filters";
+            return false;
+        }
+
+        expected.merge(child->bloom);
+    }
+
+    if (node->bloom.bitArray != expected.bitArray) {
+        error = "Parent Bloom filter differs from OR of child filters";
+        return false;
+    }
+
+    for (const Node* child : node->children) {
+        if (!validateBloomFilter(child, error)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+bool BloomTree::validateTree(std::string& error) const
+{
+    error.clear();
+
+    if (!root) {
+        if (!leafNodes.empty()) {
+            error = "Tree is empty, but leafNodes is not empty";
+            return false;
+        }
+        return true;
+    }
+
+    if (root->parent != nullptr) {
+        error = "Root has a parent";
+        return false;
+    }
+
+    size_t expectedLeafDepth = 0;
+    bool firstLeaf = true;
+
+    std::unordered_set<const Node*> visited;
+    std::unordered_set<const Node*> foundLeaves;
+
+    std::function<bool(const Node*, size_t)> validate =
+        [&](const Node* node, size_t depth) -> bool {
+
+        if (!node) {
+            error = "Null child pointer";
+            return false;
+        }
+
+        // Wykrywanie cykli i wielokrotnego podłączenia węzła.
+        if (!visited.insert(node).second) {
+            error = "Cycle or duplicated node detected";
+            return false;
+        }
+
+        // Liść.
+        if (node->isLeaf()) {
+            if (firstLeaf) {
+                expectedLeafDepth = depth;
+                firstLeaf = false;
+            } else if (depth != expectedLeafDepth) {
+                error = "Leaves are not at the same depth";
+                return false;
+            }
+
+            if (node->startKey > node->endKey) {
+                error = "Invalid leaf key range";
+                return false;
+            }
+
+            foundLeaves.insert(node);
+            return true;
+        }
+
+        // Węzeł wewnętrzny.
+        if (node->children.size() > static_cast<size_t>(ratio)) {
+            error = "Node exceeds branching ratio";
+            return false;
+        }
+
+        if (node->children.empty()) {
+            error = "Internal node has no children";
+            return false;
+        }
+
+        for (size_t i = 0; i < node->children.size(); ++i) {
+            const Node* child = node->children[i];
+
+            if (!child) {
+                error = "Null child pointer";
+                return false;
+            }
+
+            if (child->parent != node) {
+                error = "Incorrect parent pointer";
+                return false;
+            }
+
+            if (i > 0 &&
+                node->children[i - 1]->endKey >= child->startKey) {
+                error = "Children are not ordered or ranges overlap";
+                return false;
+            }
+
+            if (!validate(child, depth + 1)) {
+                return false;
+            }
+        }
+
+        // Zakres węzła musi odpowiadać zakresowi jego dzieci.
+        if (node->startKey != node->children.front()->startKey) {
+            error = "Incorrect startKey in internal node";
+            return false;
+        }
+
+        if (node->endKey != node->children.back()->endKey) {
+            error = "Incorrect endKey in internal node";
+            return false;
+        }
+
+        return true;
+    };
+
+    if (!validate(root, 0)) {
+        return false;
+    }
+
+    // Sprawdzenie zgodności leafNodes z rzeczywistymi liśćmi.
+    if (foundLeaves.size() != leafNodes.size()) {
+        error = "leafNodes size does not match tree leaf count";
+        return false;
+    }
+
+    std::unordered_set<const Node*> listedLeaves;
+
+    for (const Node* leaf : leafNodes) {
+        if (!leaf || !leaf->isLeaf()) {
+            error = "leafNodes contains an invalid node";
+            return false;
+        }
+
+        if (!listedLeaves.insert(leaf).second) {
+            error = "Duplicate leaf in leafNodes";
+            return false;
+        }
+
+        if (foundLeaves.find(leaf) == foundLeaves.end()) {
+            error = "leafNodes contains a node not present in the tree";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+
+// Previous
+/*void BloomTree::buildLevel(std::vector<Node*>& nodes) {
     if (nodes.size() == 1) {
         root = std::move(nodes.front());
         return;
@@ -48,11 +236,309 @@ void BloomTree::buildLevel(std::vector<Node*>& nodes) {
 
     buildLevel(parentLevel);
 }
+*/
+
+
+
+void BloomTree::buildLevel(std::vector<Node*>& nodes) {
+    if (nodes.empty()) {
+        root = nullptr;
+        return;
+    }
+
+    if (nodes.size() == 1) {
+        root = nodes.front();
+        root->parent = nullptr;
+        return;
+    }
+
+    std::vector<Node*> parentLevel;
+
+    for (size_t i = 0; i < nodes.size(); i += ratio) {
+        size_t end = std::min(i + ratio, nodes.size());
+
+        Node* parent = new Node(
+            BloomFilter(bloomSize, numHashFunctions),
+            "Memory",
+            nodes[i]->startKey,
+            nodes[end - 1]->endKey
+        );
+
+        for (size_t j = i; j < end; ++j) {
+            Node* child = nodes[j];
+
+            parent->bloom.merge(child->bloom);
+            parent->children.push_back(child);
+
+            child->parent = parent;
+
+            if (child->startKey < parent->startKey) {
+                parent->startKey = child->startKey;
+            }
+
+            if (child->endKey > parent->endKey) {
+                parent->endKey = child->endKey;
+            }
+        }
+
+        parentLevel.push_back(parent);
+    }
+
+    buildLevel(parentLevel);
+}
+
+
 
 void BloomTree::buildTree() {
     buildLevel(leafNodes);
     for (Node* node : leafNodes) {
         node->bloom.saveToFile(node->filename + "_" + node->startKey + "_" + node->endKey);
+    }
+}
+
+
+void BloomTree::appendLeaves(BloomTree& other)
+{
+    spdlog::info(
+        "appendLeaves: target leaves={}, source leaves={}",
+        leafNodes.size(),
+        other.leafNodes.size()
+    );
+
+    // Wstawiaj każdy nowy liść do istniejącego drzewa.
+    for (Node* node : other.leafNodes) {
+
+        if (!node) {
+            throw std::runtime_error("Null leaf in source tree");
+        }
+
+        spdlog::info(
+            "INSERT LEAF: file={}, newStart={}, newEnd={}, "
+            "treeStart={}, treeEnd={}",
+            node->filename,
+            node->startKey,
+            node->endKey,
+            root ? root->startKey : "EMPTY",
+            root ? root->endKey : "EMPTY"
+        );
+
+        insertLeaf(
+            std::move(node->bloom),
+            node->filename,
+            node->startKey,
+            node->endKey
+        );
+        
+        spdlog::info(
+        "AFTER INSERT: leaves={}, root range=[{}, {}]",
+        leafNodes.size(),
+        root->startKey,
+        root->endKey
+);
+        
+    }
+
+    spdlog::info(
+    "TREE ADDRESS: target={}, source={}",
+    static_cast<const void*>(this),
+    static_cast<const void*>(&other)
+    );
+
+    other.leafNodes.clear();
+    other.root = nullptr;
+}
+
+
+void BloomTree::insertLeaf(
+    BloomFilter&& bloom,
+    const std::string& filename,
+    const std::string& startKey,
+    const std::string& endKey)
+{
+    if (startKey > endKey) {
+        throw std::invalid_argument("Invalid SST key range");
+    }
+
+    if (root && startKey <= root->endKey) {
+        spdlog::error(
+            "APPEND ERROR: SST={}, newStart={}, newEnd={}, "
+            "treeStart={}, treeEnd={}",
+            filename,
+            startKey,
+            endKey,
+            root->startKey,
+            root->endKey
+        );
+
+        throw std::invalid_argument(
+            "New SST range must be after the existing tree range");
+    }
+
+    spdlog::info(
+        "APPEND OK: SST={}, newStart={}, newEnd={}, treeEnd={}",
+        filename,
+        startKey,
+        endKey,
+        root ? root->endKey : "EMPTY"
+    );
+
+    Node* leaf = new Node(
+        std::move(bloom),
+        filename,
+        startKey,
+        endKey
+    );
+
+    leafNodes.push_back(leaf);
+
+    if (!root) {
+        root = leaf;
+        return;
+    }
+
+    if (root->isLeaf()) {
+        Node* newRoot = createParent(root);
+        root = newRoot;
+
+        insertIntoNode(root, leaf);
+        return;
+    }
+
+    Node* node = root;
+
+    while (!node->children.front()->isLeaf()) {
+        node = node->children.back();
+    }
+
+    insertIntoNode(node, leaf);
+}
+
+
+Node* BloomTree::createParent(Node* child)
+{
+    auto* parent = new Node(
+        BloomFilter(bloomSize, numHashFunctions),
+        "Memory",
+        child->startKey,
+        child->endKey
+    );
+
+    parent->children.push_back(child);
+    child->parent = parent;
+
+    parent->bloom.merge(child->bloom);
+
+    return parent;
+}
+
+void BloomTree::insertIntoNode(Node* parent, Node* child)
+{
+    if (!parent || !child) {
+        throw std::invalid_argument("Null node in insertIntoNode");
+    }
+
+    child->parent = parent;
+
+    // Węzeł ma jeszcze wolne miejsce.
+    if (parent->children.size() < static_cast<size_t>(ratio)) {
+        parent->children.push_back(child);
+
+        updateAncestors(parent);
+        return;
+    }
+
+    // Węzeł jest pełny. Przygotowujemy ratio + 1 dzieci.
+    std::vector<Node*> allChildren = parent->children;
+    allChildren.push_back(child);
+
+    const size_t total = allChildren.size();
+    const size_t leftCount = total / 2;
+
+    // Zachowujemy istniejący węzeł jako lewą część splitu.
+    parent->children.clear();
+
+    parent->bloom = BloomFilter(bloomSize, numHashFunctions);
+
+    for (size_t i = 0; i < leftCount; ++i) {
+        Node* current = allChildren[i];
+
+        parent->children.push_back(current);
+        current->parent = parent;
+
+        parent->bloom.merge(current->bloom);
+    }
+
+    parent->startKey = parent->children.front()->startKey;
+    parent->endKey = parent->children.back()->endKey;
+
+    // Tworzymy prawą część splitu.
+    Node* rightNode = new Node(
+        BloomFilter(bloomSize, numHashFunctions),
+        "Memory",
+        allChildren[leftCount]->startKey,
+        allChildren.back()->endKey
+    );
+
+    for (size_t i = leftCount; i < total; ++i) {
+        Node* current = allChildren[i];
+
+        rightNode->children.push_back(current);
+        current->parent = rightNode;
+
+        rightNode->bloom.merge(current->bloom);
+    }
+
+    rightNode->startKey = rightNode->children.front()->startKey;
+    rightNode->endKey = rightNode->children.back()->endKey;
+
+    // Zapamiętujemy rodzica przed ewentualnym splitem wyżej.
+    Node* grandParent = parent->parent;
+
+    if (!grandParent) {
+        // Przepełnił się root. Tworzymy nowy poziom.
+        Node* newRoot = new Node(
+            BloomFilter(bloomSize, numHashFunctions),
+            "Memory",
+            parent->startKey,
+            rightNode->endKey
+        );
+
+        newRoot->children.push_back(parent);
+        newRoot->children.push_back(rightNode);
+
+        parent->parent = newRoot;
+        rightNode->parent = newRoot;
+
+        newRoot->bloom.merge(parent->bloom);
+        newRoot->bloom.merge(rightNode->bloom);
+
+        root = newRoot;
+        return;
+    }
+
+    // Wstawiamy prawą część splitu do rodzica.
+    // Jeżeli rodzic jest pełny, split zostanie wykonany rekurencyjnie.
+    insertIntoNode(grandParent, rightNode);
+}
+
+
+void BloomTree::updateAncestors(Node* node)
+{
+    while (node) {
+        // Odtwarzamy filtr od zera, aby nie pozostawiać
+        // bitów należących do poprzedniego zestawu dzieci.
+        node->bloom = BloomFilter(bloomSize, numHashFunctions);
+
+        for (Node* child : node->children) {
+            node->bloom.merge(child->bloom);
+        }
+
+        if (!node->children.empty()) {
+            node->startKey = node->children.front()->startKey;
+            node->endKey = node->children.back()->endKey;
+        }
+
+        node = node->parent;
     }
 }
 

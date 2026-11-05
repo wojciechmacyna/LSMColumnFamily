@@ -102,6 +102,7 @@ BloomTree BloomManager::createPartitionedHierarchy(const std::vector<std::string
 
     hierarchy.leafNodes = std::move(allLeafNodes);
 
+    spdlog::info("Starting Building hierarchy.");
     hierarchy.buildTree();
     sw.stop();
     spdlog::info("Bloom hierarchy successfully built from partitions using parallel processing in {} µs.", sw.elapsedMicros());

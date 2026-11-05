@@ -20,12 +20,43 @@
 #include <cmath>
 
 
+
 #include "algorithm.hpp"
 #include "stopwatch.hpp"
 
 
 
+
 extern boost::asio::thread_pool globalThreadPool;
+
+void DBManager::flushAllColumnFamilies()
+{
+    if (!db_) {
+        throw std::runtime_error("DB not open");
+    }
+
+    for (auto& kv : cf_handles_) {
+        auto* handle = kv.second.get();
+
+        rocksdb::FlushOptions options;
+        options.wait = true;
+
+        auto status = db_->Flush(options, handle);
+
+        if (!status.ok()) {
+            throw std::runtime_error(
+                "Flush failed for CF '" + kv.first +
+                "': " + status.ToString()
+            );
+        }
+
+        spdlog::info(
+            "Flush completed for CF '{}'",
+            kv.first
+        );
+    }
+}
+
 
 void DBManager::compactAllColumnFamilies(size_t numRecords) {
   if (!db_) throw std::runtime_error("DB not open");
@@ -85,7 +116,7 @@ void DBManager::compactAllColumnFamilies(size_t numRecords) {
 }
 
 void DBManager::openDB(const std::string& dbname,
-                       std::vector<std::string> columns) {
+                       std::vector<std::string> columns, const bool adding) {
   StopWatch sw;
   sw.start();
 
@@ -97,6 +128,13 @@ void DBManager::openDB(const std::string& dbname,
   rocksdb::DBOptions dbOptions;
   dbOptions.create_if_missing = true;
   dbOptions.create_missing_column_families = true;
+
+  if (adding==true){
+    listener_ = std::make_shared<MyListener>();
+    dbOptions.listeners.emplace_back(listener_);
+    
+}
+
 
   std::vector<std::string> cf_names = columns;
   cf_names.push_back("default");
@@ -132,7 +170,7 @@ void DBManager::openDB(const std::string& dbname,
 void DBManager::insertRecords(
     int numRecords,
     std::vector<std::string> columns,
-    const DistributionConfig& config) {
+    const DistributionConfig& config, int rangeFrom) {
 
   if (!db_) throw std::runtime_error("DB not open.");
   if (numRecords < 0)
@@ -176,7 +214,7 @@ const char* distributionName =
 
   rocksdb::WriteBatch batch;
 
-  for (int i = 1; i <= numRecords; ++i) {
+  for (int i = rangeFrom; i <= numRecords; ++i) {
     const std::string index = std::to_string(i);
 
     const std::string prefixedIndex =
@@ -236,8 +274,6 @@ const char* distributionName =
       "Inserted {} records across CFs using {} distribution in {} µs.",
       numRecords, distributionName, sw.elapsedMicros());
 }
-
-
 
 
 void DBManager::insertRecordsWithSearchTargets(
@@ -352,6 +388,121 @@ bool DBManager::checkValueWithoutBloomFilters(const std::string& value) {
                    sw.elapsedMicros());
   return false;
 }
+
+
+std::vector<std::string> DBManager::getChangedSSTFilesForColumn(
+    const std::string& dbname,
+    const std::string& column)
+{
+    if (!db_) {
+        throw std::runtime_error("DB not open.");
+    }
+
+    auto it = cf_handles_.find(column);
+    if (it == cf_handles_.end()) {
+        throw std::runtime_error("Unknown Column Family: " + column);
+    }
+
+    // Pobierz zdarzenia z listenera.
+    auto changes = listener_->getChanges(column);
+
+    for (const auto& change : changes) {
+    spdlog::info(
+        "SST event: CF={}, path={}, created={}",
+        change.cf_name,
+        change.file_path,
+        change.created
+    );
+}
+
+    // Normalizacja ścieżek.
+    auto normalizePath = [&](const std::string& path) {
+    std::filesystem::path p(path);
+
+    // Usuń początkowy "/" z nazwy pliku zwracanej przez RocksDB.
+    if (p.is_absolute()) {
+        p = p.relative_path();
+    }
+
+    // Jeżeli ścieżka zawiera tylko nazwę pliku,
+    // dodaj katalog bazy danych.
+    if (!p.has_parent_path()) {
+        p = std::filesystem::path(dbname) / p;
+    }
+
+    return p.lexically_normal().string();
+};
+
+    // Zbierz ścieżki nowo utworzonych SST.
+    std::unordered_set<std::string> createdFiles;
+
+    for (const auto& change : changes) {
+        if (change.created) {
+            createdFiles.insert(normalizePath(change.file_path));
+        }
+    }
+
+    rocksdb::ColumnFamilyMetaData meta;
+
+    db_->GetColumnFamilyMetaData(
+        it->second.get(),
+        &meta
+    );
+
+    std::vector<std::string> sstFiles;
+
+
+    // Wyświetlenie ścieżek z listenera
+for (const auto& change : changes) {
+    spdlog::info(
+        "Listener path: [{}], created={}",
+        change.file_path,
+        change.created
+    );
+}
+
+// Wyświetlenie ścieżek z metadanych RocksDB
+for (const auto& level : meta.levels) {
+    for (const auto& file : level.files) {
+        std::string path = normalizePath(file.name);
+
+        spdlog::info(
+            "SST metadata: CF={}, file={}, smallest={}, largest={}",
+            column,
+            path,
+            file.smallestkey,
+            file.largestkey
+        );
+
+        if (createdFiles.contains(path)) {
+            sstFiles.push_back(path);
+
+            spdlog::info("NEW SST MATCHED: {}", path);
+        }
+    }
+}
+
+
+
+    spdlog::info(
+        "Column {}: {} current SST files, {} created events, {} new SST files",
+        column,
+        [&]() {
+            size_t count = 0;
+            for (const auto& level : meta.levels) {
+                count += level.files.size();
+            }
+            return count;
+        }(),
+        createdFiles.size(),
+        sstFiles.size()
+    );
+
+    return sstFiles;
+}
+
+
+
 
 rocksdb::Status DBManager::closeDB() {
   StopWatch sw;

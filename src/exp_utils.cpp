@@ -24,7 +24,7 @@ extern std::atomic<size_t> gSSTCheckCount;
 
 std::map<std::string, std::vector<std::string>> scanSstFilesAsync(
     const std::vector<std::string>& columns, DBManager& dbManager,
-    const TestParams& params) {
+    const TestParams& params, const bool scanAddedFiles) {
   std::map<std::string, std::vector<std::string>> columnSstFiles;
   std::vector<std::future<std::pair<std::string, std::vector<std::string>>>>
       scanFutures;
@@ -33,11 +33,18 @@ std::map<std::string, std::vector<std::string>> scanSstFilesAsync(
     std::promise<std::pair<std::string, std::vector<std::string>>> scanPromise;
     scanFutures.push_back(scanPromise.get_future());
 
-    boost::asio::post(globalThreadPool, [column, &dbManager, &params,
+    boost::asio::post(globalThreadPool, [column, &dbManager, &params, scanAddedFiles,
                                          promise =
                                              std::move(scanPromise)]() mutable {
-      auto sstFiles = dbManager.scanSSTFilesForColumn(params.dbName, column);
-      promise.set_value(std::make_pair(column, std::move(sstFiles)));
+      if (scanAddedFiles==true) {
+        auto sstFiles = dbManager.getChangedSSTFilesForColumn(params.dbName, column);
+        promise.set_value(std::make_pair(column, std::move(sstFiles)));
+      }             
+      else{
+        auto sstFiles = dbManager.scanSSTFilesForColumn(params.dbName, column);
+        promise.set_value(std::make_pair(column, std::move(sstFiles)));
+      }                            
+
     });
   }
 
@@ -62,6 +69,7 @@ std::map<std::string, BloomTree> buildHierarchies(
   }
   return hierarchies;
 }
+
 
 void writeCsvHeader(const std::string& filename,
                     const std::string& headerLine) {

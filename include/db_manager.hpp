@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "bloomTree.hpp"
+#include "listener.hpp"
 
 enum class DataDistribution {
   Normal,
@@ -32,16 +33,24 @@ struct DistributionConfig {
 class DBManager {
  public:
   void compactAllColumnFamilies(size_t numRecords = 0);
+  void flushAllColumnFamilies();
+
+
   void openDB(const std::string &dbname,
-              std::vector<std::string> columns = {"phone", "mail", "address"});
+              std::vector<std::string> columns = {"phone", "mail", "address"}, const bool adding=false);
   void insertRecords(int numRecords, std::vector<std::string> columns, 
-     const DistributionConfig& config = {});
+     const DistributionConfig& config = {}, const int rangeFrom=1);
 
   void insertRecordsWithSearchTargets(
       int numRecords, const std::vector<std::string> &columns,
       const std::unordered_set<int> &targetIndices);
   std::vector<std::string> scanSSTFilesForColumn(const std::string &dbname,
                                                  const std::string &column);
+
+    std::vector<std::string> getChangedSSTFilesForColumn(
+    const std::string& dbname,
+    const std::string& column);
+
   bool isOpen() const { return static_cast<bool>(db_); }
   rocksdb::Status closeDB();
 
@@ -82,6 +91,8 @@ class DBManager {
       const std::vector<std::string> &values);
 
  private:
+
+    std::shared_ptr<MyListener> listener_;
   struct RocksDBDeleter {
     void operator()(rocksdb::DB *dbPtr) const {
       delete dbPtr;  // Safe to call delete on a nullptr

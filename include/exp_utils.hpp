@@ -162,7 +162,7 @@ struct AggregatedQueryTimings {
 
 std::map<std::string, std::vector<std::string>> scanSstFilesAsync(
     const std::vector<std::string>& columns, DBManager& dbManager,
-    const TestParams& params);
+    const TestParams& params, const bool scanInsertedFiles=false);
 
 std::map<std::string, BloomTree> buildHierarchies(
     const std::map<std::string, std::vector<std::string>>& columnSstFiles,
