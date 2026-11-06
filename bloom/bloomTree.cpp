@@ -296,6 +296,14 @@ void BloomTree::buildTree() {
     }
 }
 
+void BloomTree::appendLeavesBatch(BloomTree& other)
+{
+    // 1. Pobierz wszystkie nowe liście.
+    // 2. Wstaw je do struktury w jednym przebiegu.
+    // 3. Zaktualizuj filtry węzłów nadrzędnych.
+    // 4. Zaktualizuj zakresy węzłów.
+    // 5. Zaktualizuj leafNodes.
+}
 
 void BloomTree::appendLeaves(BloomTree& other)
 {
@@ -382,6 +390,9 @@ void BloomTree::insertLeaf(
         root ? root->endKey : "EMPTY"
     );
 
+    auto t1 = std::chrono::steady_clock::now();
+
+
     Node* leaf = new Node(
         std::move(bloom),
         filename,
@@ -389,7 +400,11 @@ void BloomTree::insertLeaf(
         endKey
     );
 
+    auto t2 = std::chrono::steady_clock::now();
+
     leafNodes.push_back(leaf);
+
+    auto t3 = std::chrono::steady_clock::now();
 
     if (!root) {
         root = leaf;
@@ -410,7 +425,26 @@ void BloomTree::insertLeaf(
         node = node->children.back();
     }
 
+    auto t4 = std::chrono::steady_clock::now();
+
     insertIntoNode(node, leaf);
+    auto t5 = std::chrono::steady_clock::now();
+
+
+    auto ms = [](auto a, auto b) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            b - a
+        ).count();
+    };
+
+    spdlog::info(
+        "insertLeaf timing: Node={} ms, vector={} ms, traversal={} ms, "
+        "insertIntoNode={} ms",
+        ms(t1, t2),
+        ms(t2, t3),
+        ms(t3, t4),
+        ms(t4, t5)
+    );
 }
 
 
@@ -440,12 +474,22 @@ void BloomTree::insertIntoNode(Node* parent, Node* child)
     child->parent = parent;
 
     // Węzeł ma jeszcze wolne miejsce.
-    if (parent->children.size() < static_cast<size_t>(ratio)) {
-        parent->children.push_back(child);
+if (parent->children.size() < static_cast<size_t>(ratio)) {
 
-        updateAncestors(parent);
-        return;
-    }
+    parent->children.push_back(child);
+
+    // Aktualizacja filtra bezpośredniego rodzica.
+    parent->bloom.merge(child->bloom);
+
+    // Aktualizacja zakresu rodzica.
+    parent->startKey = parent->children.front()->startKey;
+    parent->endKey = parent->children.back()->endKey;
+
+    // Propagacja nowych bitów do wszystkich przodków.
+    updateAncestors(parent->parent, child->bloom);
+
+    return;
+}
 
     // Węzeł jest pełny. Przygotowujemy ratio + 1 dzieci.
     std::vector<Node*> allChildren = parent->children;
@@ -522,17 +566,16 @@ void BloomTree::insertIntoNode(Node* parent, Node* child)
 }
 
 
-void BloomTree::updateAncestors(Node* node)
+void BloomTree::updateAncestors(
+    Node* node,
+    const BloomFilter& delta)
 {
     while (node) {
-        // Odtwarzamy filtr od zera, aby nie pozostawiać
-        // bitów należących do poprzedniego zestawu dzieci.
-        node->bloom = BloomFilter(bloomSize, numHashFunctions);
 
-        for (Node* child : node->children) {
-            node->bloom.merge(child->bloom);
-        }
+        // Propagujemy nowe bity do filtra przodka.
+        node->bloom.merge(delta);
 
+        // Aktualizujemy zakres kluczy.
         if (!node->children.empty()) {
             node->startKey = node->children.front()->startKey;
             node->endKey = node->children.back()->endKey;

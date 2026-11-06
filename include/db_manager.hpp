@@ -19,6 +19,14 @@ enum class DataDistribution {
   Zipfian
 };
 
+
+
+struct SSTFileChanges {
+    std::vector<std::string> removedFiles;
+    std::vector<std::string> addedFiles;
+};
+
+
 struct DistributionConfig {
     DataDistribution type = DataDistribution::Normal;
 
@@ -47,9 +55,17 @@ class DBManager {
   std::vector<std::string> scanSSTFilesForColumn(const std::string &dbname,
                                                  const std::string &column);
 
-    std::vector<std::string> getChangedSSTFilesForColumn(
+SSTFileChanges getCompactionChangesForColumn(
+        const std::string& dbname,
+    const std::string& column
+);
+
+std::vector<std::string> getChangedSSTFilesForColumn(
     const std::string& dbname,
-    const std::string& column);
+    const std::string& column
+);
+
+
 
   bool isOpen() const { return static_cast<bool>(db_); }
   rocksdb::Status closeDB();

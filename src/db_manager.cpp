@@ -404,7 +404,7 @@ std::vector<std::string> DBManager::getChangedSSTFilesForColumn(
     }
 
     // Pobierz zdarzenia z listenera.
-    auto changes = listener_->getChanges(column);
+    auto changes = listener_->getSSTChanges(column);
 
     for (const auto& change : changes) {
     spdlog::info(
@@ -483,7 +483,6 @@ for (const auto& level : meta.levels) {
 }
 
 
-
     spdlog::info(
         "Column {}: {} current SST files, {} created events, {} new SST files",
         column,
@@ -499,6 +498,79 @@ for (const auto& level : meta.levels) {
     );
 
     return sstFiles;
+}
+
+
+
+SSTFileChanges DBManager::getCompactionChangesForColumn(
+        const std::string& dbname,
+    const std::string& column)
+{
+    if (!db_) {
+        throw std::runtime_error("DB not open.");
+    }
+
+    auto it = cf_handles_.find(column);
+
+    if (it == cf_handles_.end()) {
+        throw std::runtime_error(
+            "Unknown Column Family: " + column
+        );
+    }
+
+// Pobierz zdarzenia compaction dla wskazanego CF.
+auto changes = listener_->getCompactionChanges(column);
+
+// Normalizacja ścieżek.
+auto normalizePath = [&dbname](const std::string& path) {
+    std::filesystem::path p(path);
+
+    if (p.is_absolute() && p.parent_path() == "/") {
+        p = std::filesystem::path(dbname) / p.filename();
+    }
+    else if (!p.is_absolute() && !p.has_parent_path()) {
+        p = std::filesystem::path(dbname) / p;
+    }
+
+    return p.lexically_normal().string();
+};
+
+SSTFileChanges result;
+
+std::unordered_set<std::string> removedSet;
+std::unordered_set<std::string> addedSet;
+
+// Przetwarzanie zdarzeń compaction.
+for (const auto& change : changes) {
+
+    std::unordered_set<std::string> inputFiles;
+    std::unordered_set<std::string> outputFiles;
+
+    for (const auto& file : change.input_files) {
+        inputFiles.insert(normalizePath(file));
+    }
+
+    for (const auto& file : change.output_files) {
+        outputFiles.insert(normalizePath(file));
+    }
+
+    for (const auto& file : inputFiles) {
+        if (!outputFiles.contains(file)) {
+            removedSet.insert(file);
+        }
+    }
+
+    for (const auto& file : outputFiles) {
+        if (!inputFiles.contains(file)) {
+            addedSet.insert(file);
+        }
+    }
+}
+
+result.removedFiles.assign(removedSet.begin(), removedSet.end());
+result.addedFiles.assign(addedSet.begin(), addedSet.end());
+
+return result;
 }
 
 

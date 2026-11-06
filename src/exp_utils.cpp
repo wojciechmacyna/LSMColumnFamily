@@ -31,6 +31,7 @@ std::map<std::string, std::vector<std::string>> scanSstFilesAsync(
 
   for (const auto& column : columns) {
     std::promise<std::pair<std::string, std::vector<std::string>>> scanPromise;
+
     scanFutures.push_back(scanPromise.get_future());
 
     boost::asio::post(globalThreadPool, [column, &dbManager, &params, scanAddedFiles,

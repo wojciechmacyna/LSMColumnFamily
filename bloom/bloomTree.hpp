@@ -40,7 +40,7 @@ class BloomTree {
     std::vector<Node*> leafNodes;
 
     void insertIntoNode(Node* parent, Node* child);
-    void updateAncestors(Node* node);
+   void updateAncestors(Node* node, const BloomFilter& delta);
     Node* createParent(Node* child);
 
     bool validateBloomFilter(const Node* node, std::string& error) const;
@@ -55,6 +55,7 @@ class BloomTree {
                      const std::string& start, const std::string& end);
 
     void appendLeaves(BloomTree& other);
+    void appendLeavesBatch(BloomTree& other);
 
     void buildTree();
 

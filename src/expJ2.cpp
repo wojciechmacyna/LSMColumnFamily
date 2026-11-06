@@ -101,7 +101,7 @@ void runExpJ2(std::string baseDir, bool initMode, std::string sharedDbName,
     dbManager.openDB(params.dbName, columns, true);       
     spdlog::info("Inserting extra records.");
 
-    const int numAdditionalRecords = 200000;
+    const int numAdditionalRecords = 2000000;
     const int numInsertedRecords = params.numRecords;
 
 //      int keyEnd = keyStart + numAdditionalRecords;
@@ -111,8 +111,8 @@ void runExpJ2(std::string baseDir, bool initMode, std::string sharedDbName,
 
       dbManager.insertRecords(params.numRecords+numAdditionalRecords, columns, config, params.numRecords+1);
       try {
-        //dbManager.compactAllColumnFamilies(params.numRecords+numAdditionalRecords);
-        dbManager.flushAllColumnFamilies();
+        dbManager.compactAllColumnFamilies(params.numRecords+numAdditionalRecords);
+        //dbManager.flushAllColumnFamilies();
       } catch (const std::exception& e) {
         spdlog::error("Error '{}'", e.what());
         exit(1);
@@ -131,6 +131,37 @@ void runExpJ2(std::string baseDir, bool initMode, std::string sharedDbName,
 
 stopwatch.start();
 
+
+// Pobierz zmiany wynikające z compaction.
+std::map<std::string, SSTFileChanges> compactionChanges;
+
+for (const auto& column : columns) {
+
+    auto changes =
+        dbManager.getCompactionChangesForColumn(params.dbName, column);
+
+    if (!changes.removedFiles.empty() ||
+        !changes.addedFiles.empty()) {
+
+        spdlog::info(
+            "COMPACTION CHANGES: CF={}, removed={}, added={}",
+            column,
+            changes.removedFiles.size(),
+            changes.addedFiles.size()
+        );
+
+        for (const auto& file : changes.removedFiles) {
+            spdlog::info("  REMOVED: {}", file);
+        }
+
+        for (const auto& file : changes.addedFiles) {
+            spdlog::info("  ADDED: {}", file);
+        }
+    }
+
+    compactionChanges.emplace(column, std::move(changes));
+}
+
 auto columnSstFilesInserted =
     scanSstFilesAsync(columns, dbManager, params, true);
 
@@ -142,6 +173,8 @@ for (const auto& [column, files] : columnSstFilesInserted) {
         std::cout << "  " << filename << '\n';
           }
 }
+
+
 
 auto hierarchiesInserted =
     buildHierarchies(columnSstFilesInserted, bloomManager, params);

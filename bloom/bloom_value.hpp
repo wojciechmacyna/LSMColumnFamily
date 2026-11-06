@@ -4,13 +4,15 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <cstdint>
 
 class BloomFilter {
    private:
     size_t hash(const std::string& key, int seed) const;
 
    public:
-    std::vector<bool> bitArray;
+    //std::vector<bool> bitArray;
+    std::vector<uint64_t> bitArray;
     int numHashFunctions;
     size_t bitArraySize;
     //  for future use
