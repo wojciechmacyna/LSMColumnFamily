@@ -168,6 +168,21 @@ std::map<std::string, BloomTree> buildHierarchies(
     const std::map<std::string, std::vector<std::string>>& columnSstFiles,
     BloomManager& bloomManager, const TestParams& params);
 
+std::map<std::string, std::vector<Node*>> buildLeaves(
+    const std::map<std::string, std::vector<std::string>>& columnSstFiles,
+    BloomManager& bloomManager,
+    const TestParams& params
+);
+
+void appendSstBatch(
+    const std::vector<std::string>& columns,
+    DBManager& dbManager,
+    BloomManager& bloomManager,
+    const TestParams& params,
+    std::map<std::string, BloomTree>& hierarchies
+);
+
+
 // It takes numRuns values to search using three methods: scan, multi and single.
 // The results are avg or median calculated from numRuns
 AggregatedQueryTimings runStandardQueries(

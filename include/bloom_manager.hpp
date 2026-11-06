@@ -23,6 +23,13 @@ class BloomManager {
                                          int numHashFunctions,
                                          int branchingRatio);
 
+   std::vector<Node*> createPartitionedLeaves(
+            const std::vector<std::string>& sstFiles,
+            size_t partitionSize,
+            size_t bloomSize,
+            int numHashFunctions
+);
+
    private:
     std::vector<Node*> processSSTFile(const std::string& sstFile,
                                       size_t partitionSize,

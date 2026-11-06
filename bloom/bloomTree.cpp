@@ -305,30 +305,19 @@ void BloomTree::appendLeavesBatch(BloomTree& other)
     // 5. Zaktualizuj leafNodes.
 }
 
-void BloomTree::appendLeaves(BloomTree& other)
+void BloomTree::appendLeaves(const std::vector<Node*>& newLeaves)
 {
     spdlog::info(
-        "appendLeaves: target leaves={}, source leaves={}",
+        "appendLeaves: target leaves={}, new leaves={}",
         leafNodes.size(),
-        other.leafNodes.size()
+        newLeaves.size()
     );
 
-    // Wstawiaj każdy nowy liść do istniejącego drzewa.
-    for (Node* node : other.leafNodes) {
+    for (Node* node : newLeaves) {
 
         if (!node) {
-            throw std::runtime_error("Null leaf in source tree");
+            throw std::runtime_error("Null leaf in new leaves");
         }
-
-        spdlog::info(
-            "INSERT LEAF: file={}, newStart={}, newEnd={}, "
-            "treeStart={}, treeEnd={}",
-            node->filename,
-            node->startKey,
-            node->endKey,
-            root ? root->startKey : "EMPTY",
-            root ? root->endKey : "EMPTY"
-        );
 
         insertLeaf(
             std::move(node->bloom),
@@ -336,24 +325,18 @@ void BloomTree::appendLeaves(BloomTree& other)
             node->startKey,
             node->endKey
         );
-        
-        spdlog::info(
-        "AFTER INSERT: leaves={}, root range=[{}, {}]",
-        leafNodes.size(),
-        root->startKey,
-        root->endKey
-);
-        
+
+        // Zapisz filtr nowo utworzonego liścia.
+        Node* insertedLeaf = leafNodes.back();
+
+        insertedLeaf->bloom.saveToFile(
+            insertedLeaf->filename + "_" +
+            insertedLeaf->startKey + "_" +
+            insertedLeaf->endKey
+        );
+
+        delete node;
     }
-
-    spdlog::info(
-    "TREE ADDRESS: target={}, source={}",
-    static_cast<const void*>(this),
-    static_cast<const void*>(&other)
-    );
-
-    other.leafNodes.clear();
-    other.root = nullptr;
 }
 
 

@@ -54,7 +54,7 @@ class BloomTree {
     void addLeafNode(BloomFilter&& bv, const std::string& file,
                      const std::string& start, const std::string& end);
 
-    void appendLeaves(BloomTree& other);
+    void appendLeaves(const std::vector<Node*>& newLeaves);
     void appendLeavesBatch(BloomTree& other);
 
     void buildTree();

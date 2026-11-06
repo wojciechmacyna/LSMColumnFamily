@@ -72,6 +72,133 @@ std::map<std::string, BloomTree> buildHierarchies(
 }
 
 
+std::map<std::string, std::vector<Node*>> buildLeaves(
+    const std::map<std::string, std::vector<std::string>>& columnSstFiles,
+    BloomManager& bloomManager,
+    const TestParams& params)
+{
+    std::map<std::string, std::vector<Node*>> result;
+
+    for (const auto& [column, sstFiles] : columnSstFiles) {
+        result[column] = bloomManager.createPartitionedLeaves(
+            sstFiles,
+            params.itemsPerPartition,
+            params.bloomSize,
+            params.numHashFunctions
+        );
+    }
+
+    return result;
+}
+
+
+void appendSstBatch(
+    const std::vector<std::string>& columns,
+    DBManager& dbManager,
+    BloomManager& bloomManager,
+    const TestParams& params,
+    std::map<std::string, BloomTree>& hierarchies)
+{
+    spdlog::info("========== APPEND SST BATCH START ==========");
+
+    // 1. Pobierz zmiany wynikające z compaction.
+    std::map<std::string, SSTFileChanges> compactionChanges;
+
+    for (const auto& column : columns) {
+
+        auto changes =
+            dbManager.getCompactionChangesForColumn(
+                params.dbName, column
+            );
+
+        if (!changes.removedFiles.empty() ||
+            !changes.addedFiles.empty()) {
+
+            spdlog::info(
+                "COMPACTION CHANGES: CF={}, removed={}, added={}",
+                column,
+                changes.removedFiles.size(),
+                changes.addedFiles.size()
+            );
+
+            for (const auto& file : changes.removedFiles) {
+                spdlog::info("  REMOVED: {}", file);
+            }
+
+            for (const auto& file : changes.addedFiles) {
+                spdlog::info("  ADDED: {}", file);
+            }
+        }
+
+        compactionChanges.emplace(column, std::move(changes));
+    }
+
+    // 2. Wykryj nowe pliki SST.
+    auto columnSstFilesInserted =
+        scanSstFilesAsync(columns, dbManager, params, true);
+
+    for (const auto& [column, files] : columnSstFilesInserted) {
+
+        spdlog::info(
+            "NEW SST FILES: CF={}, count={}",
+            column,
+            files.size()
+        );
+
+        for (const auto& filename : files) {
+            spdlog::info("  {}", filename);
+        }
+    }
+
+    // 3. Zbuduj nowe liście Bloom.
+    auto insertedLeaves = buildLeaves(
+        columnSstFilesInserted,
+        bloomManager,
+        params
+    );
+
+    // 4. Dodaj liście do istniejących hierarchii.
+    for (auto& [column, leaves] : insertedLeaves) {
+
+        auto it = hierarchies.find(column);
+
+        if (it == hierarchies.end()) {
+            throw std::runtime_error(
+                "Missing existing hierarchy for column: " + column
+            );
+        }
+
+        it->second.appendLeaves(leaves);
+
+        std::string error;
+
+        if (!it->second.validateTree(error)) {
+            throw std::runtime_error(
+                "Tree validation failed for CF " +
+                column + ": " + error
+            );
+        }
+
+        if (!it->second.validateBloomFilter(it->second.root, error)) {
+            throw std::runtime_error(
+                "Bloom validation failed for CF " +
+                column + ": " + error
+            );
+        }
+
+        spdlog::info(
+            "BATCH APPENDED: CF={}, leaves={}, root range=[{}, {}]",
+            column,
+            it->second.leafNodes.size(),
+            it->second.root->startKey,
+            it->second.root->endKey
+        );
+    }
+
+    spdlog::info("========== APPEND SST BATCH END ==========");
+}
+
+
 void writeCsvHeader(const std::string& filename,
                     const std::string& headerLine) {
   std::ofstream out(filename, std::ios::app);  // Overwrite mode

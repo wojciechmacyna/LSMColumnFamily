@@ -26,11 +26,9 @@ extern void clearBloomFilterFiles(const std::string& dbDir);
 extern boost::asio::thread_pool globalThreadPool;
 
 
-
 void runExpJ2(std::string baseDir, bool initMode, std::string sharedDbName,
              int defaultNumRecords, bool skipDbScan, const DistributionConfig& config) {
   
-
   const std::vector<std::string> columns = {"phone", "mail", "address"};
   //const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 50'000'000, 500'000'000};
   const std::vector<int> dbSizes = {defaultNumRecords};
@@ -86,14 +84,6 @@ void runExpJ2(std::string baseDir, bool initMode, std::string sharedDbName,
     stopwatch.stop();
     auto bloomCreationTime = stopwatch.elapsedMicros();
 
-    size_t totalDiskBloomSize = 0;
-    size_t totalMemoryBloomSize = 0;
-    for (const auto& kv : hierarchies) {
-      const BloomTree& tree = kv.second;
-      totalDiskBloomSize += tree.diskSize();
-      totalMemoryBloomSize += tree.memorySize();
-    }
-
     dbManager.closeDB();
 
 
@@ -101,136 +91,57 @@ void runExpJ2(std::string baseDir, bool initMode, std::string sharedDbName,
     dbManager.openDB(params.dbName, columns, true);       
     spdlog::info("Inserting extra records.");
 
-    const int numAdditionalRecords = 2000000;
-    const int numInsertedRecords = params.numRecords;
+    const int numBatches = 1;
+    const int batchSize = 5'000'000;
 
-//      int keyEnd = keyStart + numAdditionalRecords;
-      
- //     int keyStart =   
- //     int numRecordsToInsert = numInsertedRecords + numAdditionalRecords;
+    for (int batch = 0; batch < numBatches; ++batch) {
 
-      dbManager.insertRecords(params.numRecords+numAdditionalRecords, columns, config, params.numRecords+1);
-      try {
-        dbManager.compactAllColumnFamilies(params.numRecords+numAdditionalRecords);
-        //dbManager.flushAllColumnFamilies();
-      } catch (const std::exception& e) {
-        spdlog::error("Error '{}'", e.what());
-        exit(1);
-      }      
+    const int startRecord =
+        params.numRecords + batch * batchSize + 1;
 
+    const int endRecord =
+        params.numRecords + (batch + 1) * batchSize;
 
-    /*
-    stopwatch.start();
-    std::map<std::string, std::vector<std::string>> columnSstFilesInserted =
-        scanSstFilesAsync(columns, dbManager, params, true);
-    std::map<std::string, BloomTree> hierarchiesInserted;
-    hierarchiesInserted = buildHierarchies(columnSstFilesInserted, bloomManager, params);
-    stopwatch.stop();
-*/
-
-
-stopwatch.start();
-
-
-// Pobierz zmiany wynikające z compaction.
-std::map<std::string, SSTFileChanges> compactionChanges;
-
-for (const auto& column : columns) {
-
-    auto changes =
-        dbManager.getCompactionChangesForColumn(params.dbName, column);
-
-    if (!changes.removedFiles.empty() ||
-        !changes.addedFiles.empty()) {
-
-        spdlog::info(
-            "COMPACTION CHANGES: CF={}, removed={}, added={}",
-            column,
-            changes.removedFiles.size(),
-            changes.addedFiles.size()
-        );
-
-        for (const auto& file : changes.removedFiles) {
-            spdlog::info("  REMOVED: {}", file);
-        }
-
-        for (const auto& file : changes.addedFiles) {
-            spdlog::info("  ADDED: {}", file);
-        }
-    }
-
-    compactionChanges.emplace(column, std::move(changes));
-}
-
-auto columnSstFilesInserted =
-    scanSstFilesAsync(columns, dbManager, params, true);
-
-for (const auto& [column, files] : columnSstFilesInserted) {
-    std::cout << "\nColumn Family: " << column << '\n';
-    std::cout << "Number of SST files: " << files.size() << '\n';
-
-    for (const auto& filename : files) {
-        std::cout << "  " << filename << '\n';
-          }
-}
-
-
-
-auto hierarchiesInserted =
-    buildHierarchies(columnSstFilesInserted, bloomManager, params);
-
-// Incremental update
-for (auto& [column, insertedTree] : hierarchiesInserted)
-{
-    auto it = hierarchies.find(column);
-
-    if (it == hierarchies.end()) {
-        throw std::runtime_error(
-            "Missing existing hierarchy for column: " + column
-        );
-    }
-
-    it->second.appendLeaves(insertedTree);
-
-    std::string error;
-    if (!it->second.validateTree(error)) {
-        throw std::runtime_error("Tree validation: " + error);
-    }
-
-    if (!it->second.validateBloomFilter(it->second.root, error)) {
-        throw std::runtime_error("Bloom validation: " + error);
-    }
-}
-
-
-for (const auto& [column, tree] : hierarchies)
-{
     spdlog::info(
-        "FINAL HIERARCHY: CF={}, leaves={}, root range=[{}, {}]",
-        column,
-        tree.leafNodes.size(),
-        tree.root->startKey,
-        tree.root->endKey
+        "INSERTING BATCH {}: records [{}, {}]",
+        batch + 1,
+        startRecord,
+        endRecord
+    );
+
+    dbManager.insertRecords(
+        endRecord,
+        columns,
+        config,
+        startRecord
+    );
+
+    try {
+        dbManager.compactAllColumnFamilies(endRecord);
+    }
+    catch (const std::exception& e) {
+        spdlog::error("Compaction error: {}", e.what());
+        throw;
+    }
+
+    stopwatch.start();
+
+    appendSstBatch(
+        columns,
+        dbManager,
+        bloomManager,
+        params,
+        hierarchies
+    );
+
+    stopwatch.stop();
+
+    spdlog::info(
+        "BATCH {} PROCESSING TIME: {} µs",
+        batch + 1,
+        stopwatch.elapsedMicros()
     );
 }
-
-
-stopwatch.stop();
-
-
-
-/*
-
-        dbManager.insertRecords(params.numRecords+numAdditionalRecords+numAdditionalRecords, columns, config, params.numRecords+numAdditionalRecords+1);
-      try {
-        dbManager.compactAllColumnFamilies(params.numRecords+numAdditionalRecords+numAdditionalRecords);
-      } catch (const std::exception& e) {
-        spdlog::error("Error '{}'", e.what());
-        exit(1);
-      }     
-*/
-
-
 
     dbManager.closeDB();
   }

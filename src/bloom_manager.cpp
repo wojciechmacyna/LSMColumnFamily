@@ -63,15 +63,13 @@ std::vector<Node*> BloomManager::processSSTFile(const std::string& sstFile,
     return partitions;
 }
 
-BloomTree BloomManager::createPartitionedHierarchy(const std::vector<std::string>& sstFiles,
-                                                   size_t partitionSize,
-                                                   size_t bloomSize,
-                                                   int numHashFunctions,
-                                                   int branchingRatio) {
-    StopWatch sw;
-    sw.start();
-    BloomTree hierarchy(branchingRatio, bloomSize, numHashFunctions);
 
+std::vector<Node*> BloomManager::createPartitionedLeaves(
+    const std::vector<std::string>& sstFiles,
+    size_t partitionSize,
+    size_t bloomSize,
+    int numHashFunctions)
+{
     std::vector<std::future<std::vector<Node*>>> futures;
     futures.reserve(sstFiles.size());
 
@@ -95,16 +93,54 @@ BloomTree BloomManager::createPartitionedHierarchy(const std::vector<std::string
     }
 
     std::vector<Node*> allLeafNodes;
+
     for (auto& fut : futures) {
-        std::vector<Node*> nodes = fut.get();
-        allLeafNodes.insert(allLeafNodes.end(), nodes.begin(), nodes.end());
+        auto nodes = fut.get();
+
+        allLeafNodes.insert(
+            allLeafNodes.end(),
+            nodes.begin(),
+            nodes.end()
+        );
     }
 
-    hierarchy.leafNodes = std::move(allLeafNodes);
+    return allLeafNodes;
+}
+
+
+BloomTree BloomManager::createPartitionedHierarchy(
+    const std::vector<std::string>& sstFiles,
+    size_t partitionSize,
+    size_t bloomSize,
+    int numHashFunctions,
+    int branchingRatio)
+{
+    StopWatch sw;
+    sw.start();
+
+    BloomTree hierarchy(
+        branchingRatio,
+        bloomSize,
+        numHashFunctions
+    );
+
+    hierarchy.leafNodes = createPartitionedLeaves(
+        sstFiles,
+        partitionSize,
+        bloomSize,
+        numHashFunctions
+    );
 
     spdlog::info("Starting Building hierarchy.");
+
     hierarchy.buildTree();
+
     sw.stop();
-    spdlog::info("Bloom hierarchy successfully built from partitions using parallel processing in {} µs.", sw.elapsedMicros());
+
+    spdlog::info(
+        "Bloom hierarchy successfully built from partitions using parallel processing in {} µs.",
+        sw.elapsedMicros()
+    );
+
     return hierarchy;
 }
