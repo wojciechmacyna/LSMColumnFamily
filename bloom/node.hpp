@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "bloom_value.hpp"
+#include "bloom_filter.hpp"
 
 class Node {
    public:

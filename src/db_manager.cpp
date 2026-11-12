@@ -19,6 +19,12 @@
 #include <algorithm>
 #include <cmath>
 
+#include <map>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
 
 
 #include "algorithm.hpp"
@@ -816,6 +822,63 @@ bool DBManager::findRecordInHierarchy(BloomTree& hierarchy,
   return false;
 }
 
+
+std::vector<std::string> DBManager::scanSSTForRanges(
+    const std::string& filename,
+    const std::string& value,
+    const std::vector<SSTRange>& ranges)
+{
+    std::vector<std::string> matchingKeys;
+
+    rocksdb::Options options;
+    rocksdb::SstFileReader reader(options);
+
+    auto status = reader.Open(filename);
+
+    if (!status.ok()) {
+        throw std::runtime_error(
+            "Failed to open SSTable '" + filename +
+            "': " + status.ToString());
+    }
+
+    rocksdb::ReadOptions readOptions;
+    readOptions.fill_cache = false;
+
+    std::unique_ptr<rocksdb::Iterator> iter(
+        reader.NewIterator(readOptions));
+
+    const rocksdb::Slice targetValue(value);
+
+    for (const auto& range : ranges) {
+        iter->Seek(range.startKey);
+
+        while (iter->Valid()) {
+            const rocksdb::Slice key = iter->key();
+
+            if (options.comparator->Compare(
+                    key, rocksdb::Slice(range.endKey)) > 0) {
+                break;
+            }
+
+            if (iter->value().compare(targetValue) == 0) {
+                matchingKeys.emplace_back(key.data(), key.size());
+            }
+
+            iter->Next();
+        }
+
+        if (!iter->status().ok()) {
+            throw std::runtime_error(
+                "Error scanning SSTable '" + filename +
+                "': " + iter->status().ToString());
+        }
+    }
+
+    return matchingKeys;
+}
+
+/* Previous version
+
 std::vector<std::string> DBManager::findUsingSingleHierarchy(
     BloomTree& hierarchy, const std::vector<std::string>& columns,
     const std::vector<std::string>& values) {
@@ -847,6 +910,17 @@ std::vector<std::string> DBManager::findUsingSingleHierarchy(
 
   std::vector<std::future<std::vector<std::string>>> sst_scan_futures;
   sst_scan_futures.reserve(candidates.size());
+
+
+
+  std::map<std::string, std::vector<SSTRange>> sstRanges;
+
+  for (const Node* node : candidates) {
+      sstRanges[node->filename].push_back({
+          node->startKey,
+          node->endKey
+      });
+  }
 
   for (const auto* candidate_node :
        candidates) {  // Changed to const auto* as queryNodes returns
@@ -968,6 +1042,150 @@ std::vector<std::string> DBManager::findUsingSingleHierarchy(
       gBloomCheckCount.load(), gLeafBloomCheckCount.load(),
       gSSTCheckCount.load());
   return matchingKeys;
+}
+*/
+
+std::vector<std::string> DBManager::findUsingSingleHierarchy(
+    BloomTree& hierarchy,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values)
+{
+    if (columns.size() != values.size() || columns.empty()) {
+        throw std::runtime_error(
+            "Number of columns and values must be equal and non-empty.");
+    }
+
+    StopWatch sw;
+    sw.start();
+
+    // --------------------------------------------------
+    // 1. Wyszukanie kandydatów w BloomTree
+    // --------------------------------------------------
+
+    std::vector<const Node*> candidates =
+        hierarchy.queryNodes(values[0], "", "");
+
+    if (candidates.empty()) {
+        spdlog::info(
+            "No candidates found in the hierarchy for '{}'.",
+            values[0]);
+
+        return {};
+    }
+
+    spdlog::info(
+        "Number of candidate leaves: {}",
+        candidates.size());
+
+    // --------------------------------------------------
+    // 2. Grupowanie liści według plików SST
+    // --------------------------------------------------
+
+    std::map<std::string, std::vector<SSTRange>> sstRanges;
+
+    for (const Node* node : candidates) {
+
+        sstRanges[node->filename].push_back({
+            node->startKey,
+            node->endKey
+        });
+    }
+
+    spdlog::info(
+        "Number of unique SST files to scan: {}",
+        sstRanges.size());
+
+    // --------------------------------------------------
+    // 3. Skanowanie każdego SST tylko raz
+    // --------------------------------------------------
+
+    std::vector<std::string> allKeys;
+
+    for (const auto& [filename, ranges] : sstRanges) {
+
+        auto keys = scanSSTForRanges(
+            filename,
+            values[0],
+            ranges);
+
+        allKeys.insert(
+            allKeys.end(),
+            keys.begin(),
+            keys.end());
+    }
+
+    // --------------------------------------------------
+    // 4. Usuwanie duplikatów
+    // --------------------------------------------------
+
+    std::sort(allKeys.begin(), allKeys.end());
+
+    allKeys.erase(
+        std::unique(allKeys.begin(), allKeys.end()),
+        allKeys.end());
+
+    spdlog::info(
+        "Number of unique keys found in SST files: {}",
+        allKeys.size());
+
+    // --------------------------------------------------
+    // 5. Weryfikacja kluczy we wszystkich kolumnach
+    // --------------------------------------------------
+
+    std::vector<std::string> matchingKeys;
+
+    for (const auto& key : allKeys) {
+
+        bool matches = true;
+
+        for (size_t i = 0; i < columns.size(); ++i) {
+
+            auto cfIt = cf_handles_.find(columns[i]);
+
+            if (cfIt == cf_handles_.end()) {
+                throw std::runtime_error(
+                    "Column Family not found: " + columns[i]);
+            }
+
+            std::string dbValue;
+
+            rocksdb::ReadOptions readOptions;
+
+          auto status = db_->Get(
+              readOptions,
+              cfIt->second.get(),
+              key,
+              &dbValue);
+
+            if (!status.ok() || dbValue != values[i]) {
+
+                matches = false;
+                break;
+            }
+        }
+
+        if (matches) {
+            matchingKeys.push_back(key);
+        }
+    }
+
+    // --------------------------------------------------
+// 6. Podsumowanie
+// --------------------------------------------------
+
+sw.stop();
+
+spdlog::info(
+    "findUsingSingleHierarchy completed. "
+    "Candidates: {}, SST files: {}, "
+    "Unique keys: {}, Matching keys: {}, Time: {} us",
+    candidates.size(),
+    sstRanges.size(),
+    allKeys.size(),
+    matchingKeys.size(),
+    sw.elapsedMicros());
+
+return matchingKeys;
 }
 
 std::string DBManager::getValue(const std::string& column_family_name,

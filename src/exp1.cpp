@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "algorithm.hpp"
-#include "bloomTree.hpp"
+#include "bloom_tree.hpp"
 #include "bloom_manager.hpp"
 #include "db_manager.hpp"
 #include "exp_utils.hpp"
@@ -23,6 +23,13 @@
 
 extern void clearBloomFilterFiles(const std::string& dbDir);
 extern boost::asio::thread_pool globalThreadPool;
+
+void writeCsvHeaders() {
+  writeCsvHeader(
+      "csv/exp_1_bloom_metrics.csv",
+      "numRecords,bloomTreeRatio,itemsPerPartition,bloomSize,numHashFunctions,"
+      "singleHierarchyLeafs,bloomDiskSize,blomMemSize");
+}
 
 void writeCsvExp3Headers() {
   writeCsvHeader("csv/exp_3_bloom_metrics.csv",
@@ -102,7 +109,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
   const int numStandardQueries = 10;
 
   // Run comprehensive analysis across different real data percentages
-  const int numQueriesPerScenario = 100;
+  const int numQueriesPerScenario = 10;
 
   DBManager dbManager;
   BloomManager bloomManager;
@@ -305,9 +312,3 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
   }
 }
 
-void writeCsvHeaders() {
-  writeCsvHeader(
-      "csv/exp_1_bloom_metrics.csv",
-      "numRecords,bloomTreeRatio,itemsPerPartition,bloomSize,numHashFunctions,"
-      "singleHierarchyLeafs,bloomDiskSize,blomMemSize");
-}

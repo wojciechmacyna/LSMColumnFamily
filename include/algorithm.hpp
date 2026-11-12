@@ -15,7 +15,7 @@
 #include <random>
 #include <algorithm>
 
-#include "bloomTree.hpp"
+#include "bloom_tree.hpp"
 #include "db_manager.hpp"
 #include "node.hpp"
 #include "stopwatch.hpp"
@@ -49,6 +49,198 @@ inline void computeIntersection(const std::vector<Node*>& nodes,
   }
 }
 
+
+inline void normalizeSSTRanges(std::vector<SSTRange>& ranges)
+{
+    if (ranges.empty()) {
+        return;
+    }
+
+    std::sort(
+        ranges.begin(),
+        ranges.end(),
+        [](const SSTRange& a, const SSTRange& b) {
+            return a.startKey < b.startKey;
+        });
+
+    std::vector<SSTRange> merged;
+    merged.reserve(ranges.size());
+
+    for (const auto& range : ranges) {
+
+        if (merged.empty() ||
+            range.startKey > merged.back().endKey) {
+
+            merged.push_back(range);
+        } else {
+            merged.back().endKey = std::max(
+                merged.back().endKey,
+                range.endKey);
+        }
+    }
+
+    ranges = std::move(merged);
+}
+
+
+
+inline std::vector<std::string> finalSstScanAndIntersect(
+    const std::vector<Combo>& leafCombinations,
+    const std::vector<std::string>& values,
+    DBManager& dbManager)
+{
+    const size_t n = values.size();
+
+    if (n == 0) {
+        return {};
+    }
+
+    // One map per column:
+    // filename -> all relevant ranges in this SST file.
+    std::vector<std::map<std::string, std::vector<SSTRange>>>
+        columnSSTRanges(n);
+
+    // --------------------------------------------------
+    // 1. Collect ranges from all leaf combinations.
+    // --------------------------------------------------
+
+    for (const Combo& combo : leafCombinations) {
+
+        if (combo.nodes.size() != n) {
+            throw std::runtime_error(
+                "Invalid leaf combination.");
+        }
+
+        for (size_t i = 0; i < n; ++i) {
+
+            const Node* leaf = combo.nodes[i];
+
+            const std::string scanStart =
+                std::max(combo.rangeStart, leaf->startKey);
+
+            const std::string scanEnd =
+                std::min(combo.rangeEnd, leaf->endKey);
+
+            if (scanStart > scanEnd) {
+                continue;
+            }
+
+            columnSSTRanges[i][leaf->filename].push_back({
+                scanStart,
+                scanEnd
+            });
+        }
+    }
+
+    // --------------------------------------------------
+    // 2. Normalize ranges for every SST file.
+    // --------------------------------------------------
+
+    for (size_t i = 0; i < n; ++i) {
+
+        for (auto& [filename, ranges] : columnSSTRanges[i]) {
+            normalizeSSTRanges(ranges);
+        }
+    }
+
+    // --------------------------------------------------
+    // 3. Scan unique SST files in parallel.
+    // --------------------------------------------------
+
+    std::vector<std::unordered_set<std::string>>
+        columnKeySets(n);
+
+    for (size_t i = 0; i < n; ++i) {
+
+        using ScanResult = std::vector<std::string>;
+
+        std::vector<std::future<ScanResult>> futures;
+
+        futures.reserve(columnSSTRanges[i].size());
+
+        for (const auto& [filename, ranges] :
+             columnSSTRanges[i]) {
+
+            auto promise =
+                std::make_shared<std::promise<ScanResult>>();
+
+            futures.push_back(promise->get_future());
+
+            // One task per unique SST file in this column.
+            ++gSSTCheckCount;
+
+            boost::asio::post(
+                globalThreadPool,
+                [filename, ranges, value = values[i],
+                 &dbManager, promise]() {
+
+                    try {
+                        auto keys = dbManager.scanSSTForRanges(
+                            filename,
+                            value,
+                            ranges);
+
+                        promise->set_value(std::move(keys));
+
+                    } catch (...) {
+                        promise->set_exception(
+                            std::current_exception());
+                    }
+                });
+        }
+
+        // Collect results for the current column.
+        for (auto& future : futures) {
+
+            auto keys = future.get();
+
+            for (auto& key : keys) {
+                columnKeySets[i].insert(std::move(key));
+            }
+        }
+
+        // No point scanning further columns if one is empty.
+        if (columnKeySets[i].empty()) {
+            return {};
+        }
+    }
+
+    // --------------------------------------------------
+    // 4. Intersect results from all columns.
+    // --------------------------------------------------
+
+    std::unordered_set<std::string> result =
+        std::move(columnKeySets[0]);
+
+    for (size_t i = 1; i < n; ++i) {
+
+        std::unordered_set<std::string> intersection;
+
+        intersection.reserve(
+            std::min(result.size(), columnKeySets[i].size()));
+
+        for (const auto& key : result) {
+
+            if (columnKeySets[i].find(key) !=
+                columnKeySets[i].end()) {
+
+                intersection.insert(key);
+            }
+        }
+
+        result = std::move(intersection);
+
+        if (result.empty()) {
+            break;
+        }
+    }
+
+    return std::vector<std::string>(
+        result.begin(),
+        result.end());
+}
+
+/* Previous
 inline std::vector<std::string> finalSstScanAndIntersect(
     const Combo& combo, const std::vector<std::string>& values,
     DBManager& dbManager) {
@@ -106,6 +298,181 @@ inline std::vector<std::string> finalSstScanAndIntersect(
 
   return std::vector<std::string>(result.begin(), result.end());
 }
+
+*/
+
+inline void dfsMultiColumn(
+    const std::vector<std::string>& values,
+    Combo currentCombo,
+    DBManager& dbManager,
+    bool isInitialCall,
+    std::vector<Combo>& leafCombinations)
+{
+    const size_t n = currentCombo.nodes.size();
+
+    if (n != values.size()) {
+        throw std::runtime_error(
+            "Number of nodes and values must be equal.");
+    }
+
+    // 1. Check root Bloom Filters.
+    if (isInitialCall) {
+        for (size_t i = 0; i < n; ++i) {
+            ++gBloomCheckCount;
+
+            if (!currentCombo.nodes[i]->bloom.exists(values[i])) {
+                return;
+            }
+        }
+    }
+
+    // 2. Check common key range.
+    if (currentCombo.rangeStart > currentCombo.rangeEnd) {
+        return;
+    }
+
+    // 3. Check whether all selected nodes are leaves.
+    const bool allLeaves = std::all_of(
+        currentCombo.nodes.begin(),
+        currentCombo.nodes.end(),
+        [](const Node* node) {
+            return node->isLeaf();
+        });
+
+    if (allLeaves) {
+        leafCombinations.push_back(std::move(currentCombo));
+        return;
+    }
+
+    // 4. Build candidate options with progressive range pruning.
+    std::vector<std::vector<Node*>> candidateOptions(n);
+
+    std::string tightStart = currentCombo.rangeStart;
+    std::string tightEnd = currentCombo.rangeEnd;
+
+    for (size_t i = 0; i < n; ++i) {
+        Node* node = currentCombo.nodes[i];
+
+        std::string colMin;
+        std::string colMax;
+
+        bool found = false;
+
+        auto consider = [&](Node* candidate) {
+
+            // Reject candidates outside the current common range.
+            if (candidate->endKey < tightStart ||
+                candidate->startKey > tightEnd) {
+                return;
+            }
+
+            ++gBloomCheckCount;
+
+            if (candidate->isLeaf()) {
+                ++gLeafBloomCheckCount;
+            }
+
+            if (!candidate->bloom.exists(values[i])) {
+                return;
+            }
+
+            candidateOptions[i].push_back(candidate);
+
+            if (!found) {
+                colMin = candidate->startKey;
+                colMax = candidate->endKey;
+                found = true;
+            } else {
+                colMin = std::min(colMin, candidate->startKey);
+                colMax = std::max(colMax, candidate->endKey);
+            }
+        };
+
+        if (!node->isLeaf()) {
+            for (Node* child : node->children) {
+                consider(child);
+            }
+        } else {
+            consider(node);
+        }
+
+        if (!found) {
+            return;
+        }
+
+        // Tighten the common range before processing the next column.
+        if (i + 1 < n) {
+            tightStart = std::max(tightStart, colMin);
+            tightEnd = std::min(tightEnd, colMax);
+
+            if (tightStart > tightEnd) {
+                return;
+            }
+        }
+    }
+
+    // 5. Generate combinations using backtracking.
+    std::function<void(
+        size_t,
+        std::vector<Node*>&,
+        const std::string&,
+        const std::string&)> backtrack;
+
+    backtrack = [&](
+        size_t idx,
+        std::vector<Node*>& chosen,
+        const std::string& curStart,
+        const std::string& curEnd)
+    {
+        if (idx == n) {
+            Combo next{
+                chosen,
+                curStart,
+                curEnd
+            };
+
+            dfsMultiColumn(
+                values,
+                std::move(next),
+                dbManager,
+                false,
+                leafCombinations);
+
+            return;
+        }
+
+        for (Node* candidate : candidateOptions[idx]) {
+
+            const std::string newStart =
+                std::max(curStart, candidate->startKey);
+
+            const std::string newEnd =
+                std::min(curEnd, candidate->endKey);
+
+            if (newStart <= newEnd) {
+                chosen[idx] = candidate;
+
+                backtrack(
+                    idx + 1,
+                    chosen,
+                    newStart,
+                    newEnd);
+            }
+        }
+    };
+
+    std::vector<Node*> chosen(n, nullptr);
+
+    backtrack(
+        0,
+        chosen,
+        currentCombo.rangeStart,
+        currentCombo.rangeEnd);
+}
+
+
+
+/* Previous version
 
 // DFS with per‑level range pruning and optional first‑column parallel split
 inline void dfsMultiColumn(const std::vector<std::string>& values,
@@ -204,7 +571,9 @@ if (isInitialCall) {
   std::vector<Node*> chosen(n, nullptr);
   backtrack(0, chosen, currentCombo.rangeStart, currentCombo.rangeEnd);
 }
+*/
 
+/*
 // Multi-column hierarchical query interface.
 inline std::vector<std::string> multiColumnQueryHierarchical(
     std::vector<BloomTree>& trees, const std::vector<std::string>& values,
@@ -239,6 +608,7 @@ inline std::vector<std::string> multiColumnQueryHierarchical(
   globalfinalMatches.clear();
   dfsMultiColumn(values, start, dbManager, true);
 
+
   sw.stop();
   spdlog::critical(
       "Multi-column query with SST scan took {} µs, found matching {} keys.",
@@ -250,10 +620,102 @@ inline std::vector<std::string> multiColumnQueryHierarchical(
       gSSTCheckCount.load());
   return globalfinalMatches;
 }
+*/
+
+// Multi-column hierarchical query interface.
+inline std::vector<std::string> multiColumnQueryHierarchical(
+    std::vector<BloomTree>& trees,
+    const std::vector<std::string>& values,
+    const std::string& globalStart,
+    const std::string& globalEnd,
+    DBManager& dbManager)
+{
+    StopWatch sw;
+    sw.start();
+
+    const size_t n = trees.size();
+
+    if (n == 0 || n != values.size()) {
+        std::cerr
+            << "Error: Number of trees and values must match and be non-empty.\n";
+        sw.stop();
+        return {};
+    }
+
+    // Reset counters
+    gBloomCheckCount = 0;
+    gLeafBloomCheckCount = 0;
+    gSSTCheckCount = 0;
+
+    // Check roots
+    for (const auto& tree : trees) {
+        if (tree.root == nullptr) {
+            sw.stop();
+            return {};
+        }
+    }
+
+    Combo start;
+    start.nodes.resize(n);
+
+    std::string s = globalStart.empty()
+        ? trees[0].root->startKey
+        : globalStart;
+
+    std::string e = globalEnd.empty()
+        ? trees[0].root->endKey
+        : globalEnd;
+
+    for (size_t i = 0; i < n; ++i) {
+        start.nodes[i] = trees[i].root;
+
+        s = std::max(s, trees[i].root->startKey);
+        e = std::min(e, trees[i].root->endKey);
+    }
+
+    if (s > e) {
+        sw.stop();
+        return {};
+    }
+
+    start.rangeStart = s;
+    start.rangeEnd = e;
+
+    // Phase 1: Traverse BloomTree hierarchies.
+    std::vector<Combo> leafCombinations;
+
+    dfsMultiColumn(
+        values,
+        std::move(start),
+        dbManager,
+        true,
+        leafCombinations);
+
+    // Phase 2: Scan unique SST files and intersect results.
+    std::vector<std::string> matches =
+        finalSstScanAndIntersect(
+            leafCombinations,
+            values,
+            dbManager);
+
+    sw.stop();
+
+    spdlog::critical(
+        "Multi-column query took {} µs, found matching {} keys.",
+        sw.elapsedMicros(),
+        matches.size());
+
+    spdlog::info(
+        "Bloom filters checked: {} (total), {} (leaves only), SSTables checked: {}",
+        gBloomCheckCount.load(),
+        gLeafBloomCheckCount.load(),
+        gSSTCheckCount.load());
+
+    return matches;
+}
 
 
 inline std::discrete_distribution<size_t> zipfDistribution (const double zipfExponent, const size_t maxZipfCardinality, const size_t numRecords){
-  
 
   std::vector<double> weights;
   std::discrete_distribution<size_t> zipfDist;

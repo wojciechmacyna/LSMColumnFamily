@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "bloomTree.hpp"
+#include "bloom_tree.hpp"
 #include "listener.hpp"
 
 enum class DataDistribution {
@@ -19,7 +19,10 @@ enum class DataDistribution {
   Zipfian
 };
 
-
+  struct SSTRange {
+    std::string startKey;
+    std::string endKey;
+  };
 
 struct SSTFileChanges {
     std::vector<std::string> removedFiles;
@@ -86,6 +89,13 @@ std::vector<std::string> getChangedSSTFilesForColumn(
 
   // key - value
   bool checkValueWithoutBloomFilters(const std::string &value);
+
+  std::vector<std::string> scanSSTForRanges(
+    const std::string& filename,
+    const std::string& value,
+    const std::vector<SSTRange>& ranges);
+
+
   bool ScanFileForValue(const std::string &filename, const std::string &value);
   // single column check
   bool noBloomcheckValueInColumn(const std::string &column,

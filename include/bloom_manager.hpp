@@ -6,7 +6,7 @@
 #include <boost/asio/thread_pool.hpp>
 #include <memory>
 
-#include "bloomTree.hpp"
+#include "bloom_tree.hpp"
 
 extern boost::asio::thread_pool globalThreadPool;
 

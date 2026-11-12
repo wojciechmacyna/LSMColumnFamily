@@ -1,5 +1,5 @@
-#include "bloom/bloomTree.hpp"
-#include "bloom/bloom_value.hpp"
+#include "bloom/bloom_tree.hpp"
+#include "bloom/bloom_filter.hpp"
 
 #include <iostream>
 #include <string>

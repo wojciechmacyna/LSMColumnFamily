@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "algorithm.hpp"
-#include "bloomTree.hpp"
+#include "bloom_tree.hpp"
 #include "bloom_manager.hpp"
 #include "db_manager.hpp"
 #include "exp_utils.hpp"

@@ -8,8 +8,8 @@
 #include <boost/asio/thread_pool.hpp>
 #include <boost/asio/post.hpp>
 
-#include "bloomTree.hpp"
-#include "bloom_value.hpp"
+#include "bloom_tree.hpp"
+#include "bloom_filter.hpp"
 #include "stopwatch.hpp"
 
 extern boost::asio::thread_pool globalThreadPool;

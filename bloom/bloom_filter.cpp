@@ -1,4 +1,4 @@
-/* #include "bloom_value.hpp"
+/* #include "bloom_filter.hpp"
 #include <iostream>
 
 #include <chrono>
@@ -102,7 +102,7 @@ BloomFilter BloomFilter::loadFromFile(const std::string& filename) {
 }*/
 
 
-#include "bloom_value.hpp"
+#include "bloom_filter.hpp"
 
 #include <iostream>
 #include <fstream>

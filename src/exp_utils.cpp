@@ -12,7 +12,7 @@
 #include <thread>
 
 #include "algorithm.hpp"
-#include "bloomTree.hpp"
+#include "bloom_tree.hpp"
 #include "bloom_manager.hpp"
 #include "db_manager.hpp"
 #include "stopwatch.hpp"
