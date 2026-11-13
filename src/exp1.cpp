@@ -34,10 +34,10 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
   const std::vector<int> dbSizes = {defaultNumRecords};
 
   // Run stundard queries            
-  const int numStandardQueries = 10;
+  const int numStandardQueries = 3;
 
   // Run comprehensive analysis across different real data percentages
-  const int numQueriesPerScenario = 10;
+  const int numQueriesPerScenario = 3;
 
   DBManager dbManager;
   BloomManager bloomManager;

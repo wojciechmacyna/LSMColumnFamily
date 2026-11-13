@@ -11,7 +11,6 @@ class BloomFilter {
     size_t hash(const std::string& key, int seed) const;
 
    public:
-    //std::vector<bool> bitArray;
     std::vector<uint64_t> bitArray;
     int numHashFunctions;
     size_t bitArraySize;

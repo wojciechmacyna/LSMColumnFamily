@@ -14,14 +14,7 @@
 #include "bloom_filter.hpp"
 #include "stopwatch.hpp"
 
-
-
-
 extern boost::asio::thread_pool globalThreadPool;
-
-
-
-
 
 std::vector<Node*> BloomManager::processSSTFile(const std::string& sstFile,
                                                 size_t partitionSize,

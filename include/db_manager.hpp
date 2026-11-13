@@ -46,7 +46,6 @@ class DBManager {
   void compactAllColumnFamilies(size_t numRecords = 0);
   void flushAllColumnFamilies();
 
-
   void openDB(const std::string &dbname,
               std::vector<std::string> columns = {"phone", "mail", "address"}, const bool adding=false);
   void insertRecords(int numRecords, std::vector<std::string> columns, 

@@ -38,7 +38,7 @@ void OnTableFileCreated(
     });
 }
 
-    void OnCompactionCompleted(
+void OnCompactionCompleted(
         rocksdb::DB* db,
         const rocksdb::CompactionJobInfo& ci
     ) override {
@@ -84,7 +84,7 @@ void OnTableFileCreated(
         }
     }
 
-    std::vector<CompactionChange> getChanges(
+std::vector<CompactionChange> getChanges(
     const std::string& column)
 {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -105,7 +105,7 @@ void OnTableFileCreated(
     return result;
 }
 
-    std::vector<SSTChange> getSSTChanges(const std::string& column)
+std::vector<SSTChange> getSSTChanges(const std::string& column)
 {
     std::lock_guard<std::mutex> lock(mtx_);
 

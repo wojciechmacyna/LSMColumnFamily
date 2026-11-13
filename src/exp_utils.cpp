@@ -489,7 +489,7 @@ AggregatedQueryTimings runStandardQueries(
     gSSTCheckCount = 0;
     stopwatch.start();
     [[maybe_unused]] std::vector<std::string> hierarchicalMatches =
-        multiColumnQueryHierarchical(queryTrees, currentExpectedValues, "", "",
+        multiColumnQueryHierarchical(queryTrees, columns, currentExpectedValues, "", "",
                                      dbManager);
     stopwatch.stop();
     hierarchicalMultiTimes.push_back(stopwatch.elapsedMicros());
@@ -661,7 +661,7 @@ AggregatedQueryTimings runStandardQueriesWithTarget(
     gSSTCheckCount = 0;
     stopwatch.start();
     [[maybe_unused]] std::vector<std::string> hierarchicalMatches =
-        multiColumnQueryHierarchical(queryTrees, currentExpectedValues, "", "",
+        multiColumnQueryHierarchical(queryTrees,columns,  currentExpectedValues, "", "",
                                      dbManager);
     stopwatch.stop();
     hierarchicalMultiTimes.push_back(stopwatch.elapsedMicros());
@@ -932,7 +932,7 @@ std::vector<PatternQueryResult> runPatternQueriesWithCsvData(
     gSSTCheckCount = 0;
     stopwatch.start();
     [[maybe_unused]] std::vector<std::string> hierarchicalMatches =
-        multiColumnQueryHierarchical(queryTrees, currentExpectedValues, "", "",
+        multiColumnQueryHierarchical(queryTrees, columns, currentExpectedValues, "", "",
                                      dbManager);
     stopwatch.stop();
     result.hierarchicalMultiTime = stopwatch.elapsedMicros();
@@ -1127,16 +1127,10 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     result.isRealData = useRealData;
 
     // --- Hash Index Scan ---
-    long long hashIndexTime = 0;
+  
     stopwatch.start();
-
-    auto resultsData = dbManager.findUsingHashIndexes(
-    columns,
-    currentExpectedValues,
-    *columnSstFiles);
-
+    auto resultsData = dbManager.findUsingHashIndexes(columns,currentExpectedValues,*columnSstFiles);
     stopwatch.stop();
-    hashIndexTime = stopwatch.elapsedMicros();
     result.hashIndexTime = stopwatch.elapsedMicros();
   
 
@@ -1146,7 +1140,7 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     gSSTCheckCount = 0;
     stopwatch.start();
     [[maybe_unused]] std::vector<std::string> hierarchicalMatches =
-        multiColumnQueryHierarchical(queryTrees, currentExpectedValues, "", "",
+        multiColumnQueryHierarchical(queryTrees, columns, currentExpectedValues, "", "",
                                      dbManager);
     stopwatch.stop();
     result.hierarchicalMultiTime = stopwatch.elapsedMicros();
