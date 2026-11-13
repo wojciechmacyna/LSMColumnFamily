@@ -14,9 +14,6 @@
 #include "bloom_manager.hpp"
 #include "db_manager.hpp"
 #include "exp1.hpp"
-#include "exp2.hpp"
-#include "exp3.hpp"
-#include "exp4.hpp"
 #include "exp5.hpp"
 #include "exp6.hpp"
 #include "exp7.hpp"
@@ -77,15 +74,12 @@ int main(int argc, char* argv[]) {
 
   try {
     // run section- test
-    //runExp1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
-    // EXP 2 included in exp5 run
-    // EXP 3 included in exp1 first run (creating DB)
-    // EXP 4 included in exp1 first run (running queries)
+    runExp1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     //runExp5(sharedDbName, defaultNumRecords, skipDbScan);
     //runExp6(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp7(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp8(baseDir, initMode, skipDbScan);
-    runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    //runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     // runExpJ2(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
   } catch (const std::exception& e) {
     spdlog::error("[Error] {}", e.what());

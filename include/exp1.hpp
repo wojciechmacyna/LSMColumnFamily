@@ -6,4 +6,4 @@
 
 void runExp1(std::string baseDir, bool initMode, std::string sharedDbName, int defaultNumRecords, 
     bool skipDbScan, const DistributionConfig& config = {});
-void writeCsvHeaders();
+

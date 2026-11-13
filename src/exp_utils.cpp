@@ -10,17 +10,64 @@
 #include <random>
 #include <sstream>
 #include <thread>
+#include <filesystem>
 
 #include "algorithm.hpp"
 #include "bloom_tree.hpp"
 #include "bloom_manager.hpp"
 #include "db_manager.hpp"
 #include "stopwatch.hpp"
+#include "sst_hash_index.hpp"
 
 extern boost::asio::thread_pool globalThreadPool;
 extern std::atomic<size_t> gBloomCheckCount;
 extern std::atomic<size_t> gLeafBloomCheckCount;
 extern std::atomic<size_t> gSSTCheckCount;
+
+
+uint64_t buildHashIndexesAsync(
+    const std::map<std::string, std::vector<std::string>>& columnSstFiles) {
+
+    std::vector<std::future<uint64_t>> futures;
+
+    for (const auto& [column, sstFiles] : columnSstFiles) {
+        for (const auto& filename : sstFiles) {
+
+            std::promise<uint64_t> promise;
+            futures.push_back(promise.get_future());
+
+            std::string indexPath = filename + "." + column + ".hidx";
+
+            boost::asio::post(
+                globalThreadPool,
+                [filename, indexPath,
+                 promise = std::move(promise)]() mutable {
+                    try {
+                        if (!SSTHashIndex::exists(indexPath)) {
+                            SSTHashIndex::build(filename, indexPath, 4096);
+                        }
+
+                        uint64_t size =
+                            std::filesystem::file_size(indexPath);
+
+                        promise.set_value(size);
+
+                    } catch (...) {
+                        promise.set_exception(std::current_exception());
+                    }
+                });
+        }
+    }
+
+    uint64_t totalSize = 0;
+
+    for (auto& future : futures) {
+        totalSize += future.get();
+    }
+
+    return totalSize;
+}
+
 
 std::map<std::string, std::vector<std::string>> scanSstFilesAsync(
     const std::vector<std::string>& columns, DBManager& dbManager,
@@ -293,7 +340,8 @@ CountStatistics calculateCountStatistics(const std::vector<T>& values) {
 AggregatedQueryTimings runStandardQueries(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
     const std::vector<std::string>& columns, size_t dbSize, int numRuns,
-    bool skipDbScan, const DistributionConfig& config) {
+    bool skipDbScan, const DistributionConfig& config, const std::map<std::string, std::vector<std::string>>*
+    columnSstFiles) {
   AggregatedQueryTimings aggregated_timings;
   if (numRuns <= 0) {
     spdlog::warn(
@@ -303,7 +351,8 @@ AggregatedQueryTimings runStandardQueries(
   }
 
   std::vector<long long> globalScanTimes, hierarchicalMultiTimes,
-      hierarchicalSingleTimes;
+      hierarchicalSingleTimes, hashIndexTimeStats; 
+
   std::vector<size_t> multiCol_bloomChecks_vec;
   std::vector<size_t> multiCol_leafBloomChecks_vec;
   std::vector<size_t> multiCol_sstChecks_vec;
@@ -317,6 +366,8 @@ AggregatedQueryTimings runStandardQueries(
   globalScanTimes.reserve(numRuns);
   hierarchicalMultiTimes.reserve(numRuns);
   hierarchicalSingleTimes.reserve(numRuns);
+  hashIndexTimeStats.reserve(numRuns);
+
   multiCol_bloomChecks_vec.reserve(numRuns);
   multiCol_leafBloomChecks_vec.reserve(numRuns);
   multiCol_sstChecks_vec.reserve(numRuns);
@@ -381,7 +432,7 @@ AggregatedQueryTimings runStandardQueries(
 
   StopWatch stopwatch;
   std::vector<std::string> currentExpectedValues;
-  long long globalScanTime = 0;
+
   for (int i = 0; i < numRuns; ++i) {
     currentExpectedValues.clear();
     currentExpectedValues.reserve(columns.size());
@@ -406,6 +457,7 @@ AggregatedQueryTimings runStandardQueries(
     }
 
     // --- Global Scan Query ---
+    long long globalScanTime = 0;
     if (!skipDbScan && i == 0) {
       stopwatch.start();
       [[maybe_unused]] std::vector<std::string> globalMatches =
@@ -416,6 +468,20 @@ AggregatedQueryTimings runStandardQueries(
       globalScanTime = 0;
     }
     globalScanTimes.push_back(globalScanTime);
+
+    // --- Hash Index Scan ---
+    long long hashIndexTime = 0;
+    stopwatch.start();
+
+    auto results = dbManager.findUsingHashIndexes(
+    columns,
+    currentExpectedValues,
+    *columnSstFiles);
+
+    stopwatch.stop();
+    hashIndexTime = stopwatch.elapsedMicros();
+    hashIndexTimeStats.push_back(hashIndexTime);
+
 
     // --- Hierarchical Multi-Column Query ---
     gBloomCheckCount = 0;
@@ -459,6 +525,8 @@ AggregatedQueryTimings runStandardQueries(
       calculateNumericStatistics(hierarchicalMultiTimes);
   aggregated_timings.hierarchicalSingleTimeStats =
       calculateNumericStatistics(hierarchicalSingleTimes);
+  aggregated_timings.hashIndexTimeStats =   
+      calculateNumericStatistics(hashIndexTimeStats);  
 
   aggregated_timings.multiCol_bloomChecksStats =
       calculateCountStatistics(multiCol_bloomChecks_vec);
@@ -915,7 +983,9 @@ std::vector<PatternQueryResult> runPatternQueriesWithCsvData(
 std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
     const std::vector<std::string>& columns, size_t dbSize, int numQueries, 
-    double realDataPercentage, const DistributionConfig& config) {
+    double realDataPercentage, const DistributionConfig& config,
+  const std::map<std::string, std::vector<std::string>>*
+    columnSstFiles) {
   std::vector<MixedQueryResult> results;
 
   // Setup query trees
@@ -1056,6 +1126,20 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     result.queryIndex = queryIdx;
     result.isRealData = useRealData;
 
+    // --- Hash Index Scan ---
+    long long hashIndexTime = 0;
+    stopwatch.start();
+
+    auto resultsData = dbManager.findUsingHashIndexes(
+    columns,
+    currentExpectedValues,
+    *columnSstFiles);
+
+    stopwatch.stop();
+    hashIndexTime = stopwatch.elapsedMicros();
+    result.hashIndexTime = stopwatch.elapsedMicros();
+  
+
     // --- Hierarchical Multi-Column Query ---
     gBloomCheckCount = 0;
     gLeafBloomCheckCount = 0;
@@ -1112,7 +1196,9 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
 
 std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
-    const std::vector<std::string>& columns, size_t dbSize, int numQueriesPerScenario, const DistributionConfig& config) {
+    const std::vector<std::string>& columns, size_t dbSize, int numQueriesPerScenario, const DistributionConfig& config,
+  const std::map<std::string, std::vector<std::string>>*
+    columnSstFiles) {
   
   std::vector<AccumulatedQueryMetrics> accumulatedResults;
   
@@ -1127,7 +1213,7 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     
     // Run mixed queries for this percentage
     std::vector<MixedQueryResult> results = runMixedQueriesWithCsvData(
-        dbManager, hierarchies, columns, dbSize, numQueriesPerScenario, percentage, config);
+        dbManager, hierarchies, columns, dbSize, numQueriesPerScenario, percentage, config, columnSstFiles);
     
     if (results.empty()) {
       spdlog::warn("No results returned for {}% real data scenario", percentage);
@@ -1143,9 +1229,9 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     metrics.numColumns = columns.size();
     
     // Initialize sums for averaging
-    long long totalMultiTime = 0, totalSingleTime = 0;
-    long long realMultiTimeSum = 0, realSingleTimeSum = 0;
-    long long falseMultiTimeSum = 0, falseSingleTimeSum = 0;
+    long long totalMultiTime = 0, totalSingleTime = 0, totalHashIndexTime = 0;
+    long long realMultiTimeSum = 0, realSingleTimeSum = 0, realHashIndexTimeSum = 0;
+    long long falseMultiTimeSum = 0, falseSingleTimeSum = 0, falseHashIndexTimeSum = 0;
     
     size_t totalMultiBloomChecks = 0, totalMultiLeafBloomChecks = 0, totalMultiSSTChecks = 0;
     size_t totalSingleBloomChecks = 0, totalSingleLeafBloomChecks = 0, totalSingleSSTChecks = 0;
@@ -1158,7 +1244,8 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     for (const auto& result : results) {
       totalMultiTime += result.hierarchicalMultiTime;
       totalSingleTime += result.hierarchicalSingleTime;
-      
+      totalHashIndexTime += result.hashIndexTime;
+
       totalMultiBloomChecks += result.multiCol_bloomChecks;
       totalMultiLeafBloomChecks += result.multiCol_leafBloomChecks;
       totalMultiSSTChecks += result.multiCol_sstChecks;
@@ -1172,12 +1259,14 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
         metrics.realQueries++;
         realMultiTimeSum += result.hierarchicalMultiTime;
         realSingleTimeSum += result.hierarchicalSingleTime;
+        realHashIndexTimeSum += result.hashIndexTime;
         realMultiBloomChecksSum += result.multiCol_bloomChecks;
         realMultiSSTChecksSum += result.multiCol_sstChecks;
       } else {
         metrics.falseQueries++;
         falseMultiTimeSum += result.hierarchicalMultiTime;
         falseSingleTimeSum += result.hierarchicalSingleTime;
+        falseHashIndexTimeSum += result.hashIndexTime;
         falseMultiBloomChecksSum += result.multiCol_bloomChecks;
         falseMultiSSTChecksSum += result.multiCol_sstChecks;
       }
@@ -1186,6 +1275,7 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     // Calculate averages
     metrics.avgHierarchicalMultiTime = static_cast<double>(totalMultiTime) / metrics.totalQueries;
     metrics.avgHierarchicalSingleTime = static_cast<double>(totalSingleTime) / metrics.totalQueries;
+    metrics.avgHashIndexTime =  static_cast<double>(totalHashIndexTime) / metrics.totalQueries;
     
     metrics.avgMultiBloomChecks = static_cast<double>(totalMultiBloomChecks) / metrics.totalQueries;
     metrics.avgMultiLeafBloomChecks = static_cast<double>(totalMultiLeafBloomChecks) / metrics.totalQueries;
@@ -1211,6 +1301,7 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     if (metrics.realQueries > 0) {
       metrics.avgRealDataMultiTime = static_cast<double>(realMultiTimeSum) / metrics.realQueries;
       metrics.avgRealDataSingleTime = static_cast<double>(realSingleTimeSum) / metrics.realQueries;
+      metrics.avgRealHashIndexTime = static_cast<double>(realHashIndexTimeSum) / metrics.realQueries;
       metrics.avgRealMultiBloomChecks = static_cast<double>(realMultiBloomChecksSum) / metrics.realQueries;
       metrics.avgRealMultiSSTChecks = static_cast<double>(realMultiSSTChecksSum) / metrics.realQueries;
       metrics.avgRealMultiBloomChecksPerColumn = metrics.avgRealMultiBloomChecks / numCols;
@@ -1218,6 +1309,7 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     } else {
       metrics.avgRealDataMultiTime = 0.0;
       metrics.avgRealDataSingleTime = 0.0;
+      metrics.avgRealHashIndexTime = 0.0;
       metrics.avgRealMultiBloomChecks = 0.0;
       metrics.avgRealMultiSSTChecks = 0.0;
       metrics.avgRealMultiBloomChecksPerColumn = 0.0;
@@ -1227,6 +1319,7 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     if (metrics.falseQueries > 0) {
       metrics.avgFalseDataMultiTime = static_cast<double>(falseMultiTimeSum) / metrics.falseQueries;
       metrics.avgFalseDataSingleTime = static_cast<double>(falseSingleTimeSum) / metrics.falseQueries;
+      metrics.avgFalseHashIndexTime = static_cast<double>(realHashIndexTimeSum) / metrics.falseQueries;
       metrics.avgFalseMultiBloomChecks = static_cast<double>(falseMultiBloomChecksSum) / metrics.falseQueries;
       metrics.avgFalseMultiSSTChecks = static_cast<double>(falseMultiSSTChecksSum) / metrics.falseQueries;
       metrics.avgFalseMultiBloomChecksPerColumn = metrics.avgFalseMultiBloomChecks / numCols;
@@ -1234,6 +1327,7 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     } else {
       metrics.avgFalseDataMultiTime = 0.0;
       metrics.avgFalseDataSingleTime = 0.0;
+      metrics.avgFalseHashIndexTime = 0.0;
       metrics.avgFalseMultiBloomChecks = 0.0;
       metrics.avgFalseMultiSSTChecks = 0.0;
       metrics.avgFalseMultiBloomChecksPerColumn = 0.0;

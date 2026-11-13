@@ -28,6 +28,13 @@ public:
         return std::chrono::duration_cast<std::chrono::microseconds>(end_time_ - start_time_).count();
     }
 
+    /**
+     * @brief Returns the elapsed time in miliseconds.
+     */
+    long long elapsedMilis() const {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(end_time_ - start_time_).count();
+    }
+
 private:
     std::chrono::steady_clock::time_point start_time_{};
     std::chrono::steady_clock::time_point end_time_{};

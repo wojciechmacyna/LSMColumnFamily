@@ -29,11 +29,152 @@
 
 #include "algorithm.hpp"
 #include "stopwatch.hpp"
-
+#include "sst_hash_index.hpp"
 
 
 
 extern boost::asio::thread_pool globalThreadPool;
+
+std::vector<std::string> DBManager::findUsingHashIndexes(
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    const std::map<std::string, std::vector<std::string>>& columnSstFiles) {
+
+    if (columns.empty() || columns.size() != values.size()) {
+        return {};
+    }
+
+    // One candidate-key set per queried column.
+    std::vector<std::unordered_set<std::string>> columnResults;
+    columnResults.reserve(columns.size());
+
+    // ---------------------------------------------------------
+    // 1. Search ALL local hash indexes for every column.
+    // ---------------------------------------------------------
+
+    for (size_t i = 0; i < columns.size(); ++i) {
+
+        const auto& column = columns[i];
+        const auto& value = values[i];
+
+        auto filesIt = columnSstFiles.find(column);
+
+        if (filesIt == columnSstFiles.end()) {
+            throw std::runtime_error(
+                "No SST files registered for column: " + column);
+        }
+
+        std::unordered_set<std::string> matchingKeys;
+
+        for (const auto& sstFile : filesIt->second) {
+
+            const std::string indexPath =
+                sstFile + "." + column + ".hidx";
+
+            SSTHashIndex index;
+
+            if (!index.open(indexPath)) {
+                throw std::runtime_error(
+                    "Cannot open hash index: " + indexPath);
+            }
+
+            std::vector<std::string> keys;
+
+            if (!index.lookup(value, keys)) {
+                throw std::runtime_error(
+                    "Hash index lookup failed: " + indexPath);
+            }
+
+            matchingKeys.insert(
+                std::make_move_iterator(keys.begin()),
+                std::make_move_iterator(keys.end()));
+        }
+
+        columnResults.push_back(std::move(matchingKeys));
+    }
+
+    // ---------------------------------------------------------
+    // 2. Intersect candidate keys from all columns.
+    // ---------------------------------------------------------
+
+    // Start with the smallest candidate set.
+    size_t smallestIndex = 0;
+
+    for (size_t i = 1; i < columnResults.size(); ++i) {
+        if (columnResults[i].size() <
+            columnResults[smallestIndex].size()) {
+            smallestIndex = i;
+        }
+    }
+
+    std::vector<std::string> candidates;
+
+    for (const auto& key : columnResults[smallestIndex]) {
+
+        bool presentInAll = true;
+
+        for (size_t i = 0; i < columnResults.size(); ++i) {
+
+            if (i == smallestIndex) {
+                continue;
+            }
+
+            if (columnResults[i].find(key) ==
+                columnResults[i].end()) {
+                presentInAll = false;
+                break;
+            }
+        }
+
+        if (presentInAll) {
+            candidates.push_back(key);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // 3. Verify candidates against current RocksDB data.
+    // ---------------------------------------------------------
+
+    std::vector<std::string> results;
+
+    for (const auto& key : candidates) {
+
+        bool matches = true;
+
+        for (size_t i = 0; i < columns.size(); ++i) {
+
+            auto handleIt = cf_handles_.find(columns[i]);
+
+            if (handleIt == cf_handles_.end()) {
+                throw std::runtime_error(
+                    "Unknown column family: " + columns[i]);
+            }
+
+            std::string currentValue;
+
+            rocksdb::Status status = db_->Get(
+                rocksdb::ReadOptions(),
+                handleIt->second.get(),
+                key,
+                &currentValue);
+
+            if (!status.ok() || currentValue != values[i]) {
+                matches = false;
+                break;
+            }
+        }
+
+        if (matches) {
+            results.push_back(key);
+        }
+    }
+
+    std::sort(results.begin(), results.end());
+
+    return results;
+}
+
+
 
 void DBManager::flushAllColumnFamilies()
 {

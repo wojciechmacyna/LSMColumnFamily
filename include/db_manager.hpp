@@ -68,7 +68,10 @@ std::vector<std::string> getChangedSSTFilesForColumn(
     const std::string& column
 );
 
-
+std::vector<std::string> findUsingHashIndexes(
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    const std::map<std::string, std::vector<std::string>>& columnSstFiles);
 
   bool isOpen() const { return static_cast<bool>(db_); }
   rocksdb::Status closeDB();
@@ -94,7 +97,6 @@ std::vector<std::string> getChangedSSTFilesForColumn(
     const std::string& filename,
     const std::string& value,
     const std::vector<SSTRange>& ranges);
-
 
   bool ScanFileForValue(const std::string &filename, const std::string &value);
   // single column check

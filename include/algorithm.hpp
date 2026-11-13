@@ -234,6 +234,7 @@ inline std::vector<std::string> finalSstScanAndIntersect(
             break;
         }
     }
+   
 
     return std::vector<std::string>(
         result.begin(),

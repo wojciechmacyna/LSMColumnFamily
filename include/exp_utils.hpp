@@ -58,6 +58,7 @@ struct MixedQueryResult {
   bool isRealData;
   long long hierarchicalMultiTime;
   long long hierarchicalSingleTime;
+  long long hashIndexTime;
   size_t multiCol_bloomChecks;
   size_t multiCol_leafBloomChecks;
   size_t multiCol_sstChecks;
@@ -90,10 +91,13 @@ struct AccumulatedQueryMetrics {
   // Average timing metrics
   double avgHierarchicalMultiTime;
   double avgHierarchicalSingleTime;
+  double avgHashIndexTime;
   double avgRealDataMultiTime;
   double avgRealDataSingleTime;
+  double avgRealHashIndexTime;
   double avgFalseDataMultiTime;
   double avgFalseDataSingleTime;
+  double avgFalseHashIndexTime;
   
   // Average check metrics
   double avgMultiBloomChecks;
@@ -134,6 +138,7 @@ struct AggregatedQueryTimings {
   TimingStatistics globalScanTimeStats;
   TimingStatistics hierarchicalMultiTimeStats;
   TimingStatistics hierarchicalSingleTimeStats;
+  TimingStatistics hashIndexTimeStats;
 
   CountStatistics multiCol_bloomChecksStats;
   CountStatistics multiCol_leafBloomChecksStats;
@@ -159,6 +164,11 @@ struct AggregatedQueryTimings {
   
   size_t numColumns;  // Number of columns for reference
 };
+
+
+uint64_t buildHashIndexesAsync(
+    const std::map<std::string, std::vector<std::string>>& columnSstFiles);
+
 
 std::map<std::string, std::vector<std::string>> scanSstFilesAsync(
     const std::vector<std::string>& columns, DBManager& dbManager,
@@ -191,7 +201,7 @@ AggregatedQueryTimings runStandardQueries(
     size_t dbSizeForExpectedValues,  // This might need to become a list or
                                      // generate multiple values
     int numRuns = 10,  // Added numRuns parameter with a default value
-    bool skipDbScan = false, const DistributionConfig& config = {});
+    bool skipDbScan = false, const DistributionConfig& config = {}, const std::map<std::string, std::vector<std::string>>* columnSstFiles = nullptr);
 
 AggregatedQueryTimings runStandardQueriesWithTarget(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
@@ -213,12 +223,14 @@ std::vector<PatternQueryResult> runPatternQueriesWithCsvData(
 std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
     const std::vector<std::string>& columns, size_t dbSize, int numQueries, 
-    double realDataPercentage, const DistributionConfig& config = {});
+    double realDataPercentage, const DistributionConfig& config = {},
+    const std::map<std::string, std::vector<std::string>>* columnSstFiles = nullptr);
 
 // Function to run comprehensive analysis across multiple real data percentages
 std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
-    const std::vector<std::string>& columns, size_t dbSize, int numQueriesPerScenario, const DistributionConfig& config = {});
+    const std::vector<std::string>& columns, size_t dbSize, int numQueriesPerScenario, const DistributionConfig& config = {},
+    const std::map<std::string, std::vector<std::string>>* columnSstFiles = nullptr);
 
 void writeCsvHeader(const std::string& filename, const std::string& headerLine);
 

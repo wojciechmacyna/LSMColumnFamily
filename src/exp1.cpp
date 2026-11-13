@@ -24,82 +24,10 @@
 extern void clearBloomFilterFiles(const std::string& dbDir);
 extern boost::asio::thread_pool globalThreadPool;
 
-void writeCsvHeaders() {
-  writeCsvHeader(
-      "csv/exp_1_bloom_metrics.csv",
-      "numRecords,bloomTreeRatio,itemsPerPartition,bloomSize,numHashFunctions,"
-      "singleHierarchyLeafs,bloomDiskSize,blomMemSize");
-}
-
-void writeCsvExp3Headers() {
-  writeCsvHeader("csv/exp_3_bloom_metrics.csv",
-                 "numRecords,bloomCreationTime,dbCreationTime");
-}
-
-void writeExp1BasicMetricsHeaders() {
-  writeCsvHeader("csv/exp_1_basic_metrics.csv",
-                 "dbSize,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime");
-}
-
-void writeExp1BasicChecksHeaders() {
-  writeCsvHeader("csv/exp_1_basic_checks.csv",
-                 "dbSize,multiBloomChecks,multiLeafBloomChecks,multiSSTChecks,"
-                 "singleBloomChecks,singleLeafBloomChecks,singleSSTChecks");
-}
-
-void writeExp1PatternTimingsHeaders() {
-  writeCsvHeader("csv/exp_1_pattern_timings.csv",
-                 "dbSize,percentageExisting,hierarchicalSingleTime,hierarchicalMultiTime");
-}
-
-void writeExp1ComprehensiveChecksHeaders() {
-  writeCsvHeader("csv/exp_1_comprehensive_checks.csv",
-                 "dbSize,realDataPercentage,"
-                 "avgMultiBloomChecks,avgMultiLeafBloomChecks,avgMultiNonLeafBloomChecks,avgMultiSSTChecks,"
-                 "avgSingleBloomChecks,avgSingleLeafBloomChecks,avgSingleNonLeafBloomChecks,avgSingleSSTChecks,"
-                 "avgRealMultiBloomChecks,avgRealMultiSSTChecks,avgFalseMultiBloomChecks,avgFalseMultiSSTChecks");
-}
-
-void writeExp1PerColumnHeaders() {
-  writeCsvHeader("csv/exp_1_per_column_stats.csv",
-                 "dbSize,realDataPercentage,numColumns,"
-                 "avgMultiBloomPerCol,avgMultiLeafPerCol,avgMultiNonLeafPerCol,avgMultiSSTPerCol,"
-                 "avgSingleBloomPerCol,avgSingleLeafPerCol,avgSingleNonLeafPerCol,avgSingleSSTPerCol,"
-                 "avgRealMultiBloomPerCol,avgRealMultiSSTPerCol,avgFalseMultiBloomPerCol,avgFalseMultiSSTPerCol");
-}
-
-void writeExp1MixedQueryHeaders() {
-  writeCsvHeader("csv/exp_1_mixed_query_summary.csv",
-                 "dbSize,realDataPercentage,totalQueries,realQueries,falseQueries,"
-                 "avgMultiTime,avgSingleTime,avgMultiBloomChecks,avgMultiSSTChecks");
-}
-
-void writeExp1TimingComparisonHeaders() {
-  writeCsvHeader("csv/exp_1_timing_comparison.csv",
-                 "dbSize,realDataPercentage,cardinality,"
-                 "avgRealMultiTime,avgRealSingleTime,"
-                 "avgFalseMultiTime,avgFalseSingleTime,"
-                 "avgHierarchicalMultiTime,avgHierarchicalSingleTime");
-}
-
-void writeExpJ1Headers() {
-  writeCsvHeader("csv/expJ1.csv",
-                 "dbSize,realDataPercentage,cardinality,"
-                 "avgRealMultiTime,avgRealSingleTime,"
-                 "avgHierarchicalMultiTime,avgHierarchicalSingleTime");
-}
 
 void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
              int defaultNumRecords, bool skipDbScan, const DistributionConfig& config) {
-  writeCsvHeaders();
-  writeExp1BasicMetricsHeaders();
-  writeExp1BasicChecksHeaders();
-  //writeExp1PatternTimingsHeaders();
-  writeExp1ComprehensiveChecksHeaders();
-  writeExp1PerColumnHeaders();
-  writeExp1MixedQueryHeaders();
-  writeExp1TimingComparisonHeaders();
-  writeExpJ1Headers();
+
 
   const std::vector<std::string> columns = {"phone", "mail", "address"};
   //const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 50'000'000, 500'000'000};
@@ -151,6 +79,11 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     stopwatch.stop();
     auto bloomCreationTime = stopwatch.elapsedMicros();
 
+    stopwatch.start();
+    uint64_t hashIndexSize = buildHashIndexesAsync(columnSstFiles);
+    stopwatch.stop();
+    auto hashIndexCreationTime = stopwatch.elapsedMicros();
+
     size_t totalDiskBloomSize = 0;
     size_t totalMemoryBloomSize = 0;
     for (const auto& kv : hierarchies) {
@@ -158,6 +91,11 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
       totalDiskBloomSize += tree.diskSize();
       totalMemoryBloomSize += tree.memorySize();
     }
+
+    writeCsvHeader(
+      "csv/exp_1_bloom_metrics.csv",
+      "numRecords,bloomTreeRatio,itemsPerPartition,bloomSize,numHashFunctions,"
+      "singleHierarchyLeafs,bloomDiskSize,blomMemSize, hashIndexSize");
 
     std::ofstream out("csv/exp_1_bloom_metrics.csv", std::ios::app);
     if (!out) {
@@ -169,36 +107,46 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
         << params.itemsPerPartition << "," << params.bloomSize << ","
         << params.numHashFunctions << ","
         << hierarchies.at(columns[0]).leafNodes.size() << ","
-        << totalDiskBloomSize << "," << totalMemoryBloomSize << "\n";
+        << totalDiskBloomSize << "," << totalMemoryBloomSize << "," << hashIndexSize <<  "\n";
     out.close();
     spdlog::info("ExpBloomMetrics: Experiment for database '{}' finished.",
                  params.dbName);
-    writeCsvExp3Headers();
-    std::ofstream outExp3("csv/exp_3_bloom_metrics.csv", std::ios::app);
+
+
+    /// Creation time metrics csv/exp_3_creation_time.csv
+     writeCsvHeader("csv/exp_1_creation_time.csv",
+                 "numRecords,dbCreationTime, bloomCreationTime, hashIndexCreationTime");
+
+    std::ofstream outExp3("csv/exp_1_creation_time.csv", std::ios::app);
     if (!outExp3) {
       spdlog::error(
           "ExpBloomMetrics: Nie udało się otworzyć pliku wynikowego!");
       return;
     }
     outExp3 << params.numRecords << "," << dbCreationTime << ","
-            << bloomCreationTime << "\n";
+            << bloomCreationTime << "," << hashIndexCreationTime << "\n";
     outExp3.close();
 
     // Run standard queries first
     AggregatedQueryTimings timings = runStandardQueries(
-        dbManager, hierarchies, columns, dbSize, numStandardQueries, skipDbScan, config);
+        dbManager, hierarchies, columns, dbSize, numStandardQueries, skipDbScan, config, &columnSstFiles);
 
+    writeCsvHeader("csv/exp_1_basic_metrics.csv",
+                 "dbSize,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime, hashScanTime");
     // Write basic metrics - timings only (4 columns)
     std::ofstream basic_metrics("csv/exp_1_basic_metrics.csv", std::ios::app);
     if (basic_metrics) {
       basic_metrics << dbSize << ","
                     << timings.globalScanTimeStats.average << ","
                     << timings.hierarchicalSingleTimeStats.average << ","
-                    << timings.hierarchicalMultiTimeStats.average << "\n";
+                    << timings.hierarchicalMultiTimeStats.average << ","
+                    << timings.hashIndexTimeStats.average << "\n";
       basic_metrics.close();
     }
 
     // Write basic checks - check counts only (6 columns)
+    writeCsvHeader("csv/exp_1_basic_checks.csv",
+                 "dbSize,multibloomChecks, multiColleafBloomChecks, multiSstChecks, singlebloomChecks, singleleafBloomChecks, singleSstChecks");
     std::ofstream basic_checks("csv/exp_1_basic_checks.csv", std::ios::app);
     if (basic_checks) {
       basic_checks << dbSize << ","
@@ -212,7 +160,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     }
 
  
-
+    /*
     // Then run pattern-based queries
     // This pattern is useless. Only one value goes to the methods
     spdlog::info("ExpBloomMetrics: Running pattern-based queries for {} columns", columns.size());
@@ -221,35 +169,54 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     
     spdlog::info("ExpBloomMetrics: Generated {} pattern results for {} columns", 
                  results.size(), columns.size());
-
-    // Write pattern results to focused CSV files
-    /*std::ofstream pattern_timings("csv/exp_1_pattern_timings.csv", std::ios::app);
-
-    for (const auto& result : results) {
-      // Pattern timings (4 columns)
-      if (pattern_timings) {
-        pattern_timings << dbSize << "," << result.percent << ","
-                       << result.hierarchicalSingleTime << ","
-                       << result.hierarchicalMultiTime << "\n";
-      }
-    }
-    pattern_timings.close();*/
-
- 
+*/
+   
     
     spdlog::info("ExpBloomMetrics: Running comprehensive analysis for {} columns with {} queries per scenario", 
                  columns.size(), numQueriesPerScenario);
     std::vector<AccumulatedQueryMetrics> comprehensiveResults = runComprehensiveQueryAnalysis(
-        dbManager, hierarchies, columns, dbSize, numQueriesPerScenario, config);
+        dbManager, hierarchies, columns, dbSize, numQueriesPerScenario, config , &columnSstFiles);
     
     spdlog::info("ExpBloomMetrics: Generated {} comprehensive analysis results for {} columns", 
                  comprehensiveResults.size(), columns.size());
 
+
+
     // Write comprehensive analysis to focused CSV files
+    writeCsvHeader("csv/exp_1_mixed_query_summary.csv",
+                 "dbSize,realDataPercentage,totalQueries,realQueries,falseQueries,"
+                 "avgMultiTime,avgSingleTime,avgHashTime, avgMultiBloomChecks,avgMultiSSTChecks");
     std::ofstream mixed_query_summary("csv/exp_1_mixed_query_summary.csv", std::ios::app);
+
+
+    writeCsvHeader("csv/exp_1_timing_comparison.csv",
+                 "dbSize,realDataPercentage,cardinality,"
+                 "avgRealMultiTime,avgRealSingleTime,avgRealHashTime,"
+                 "avgFalseMultiTime,avgFalseSingleTime,avgFalseHashTime,"
+                 "avgHierarchicalMultiTime,avgHierarchicalSingleTime, avgHashIndexTime,");
     std::ofstream timing_comparison("csv/exp_1_timing_comparison.csv", std::ios::app);
+
+    writeCsvHeader("csv/exp_1_comprehensive_checks.csv",
+                 "dbSize,realDataPercentage,"
+                 "avgMultiBloomChecks,avgMultiLeafBloomChecks,avgMultiNonLeafBloomChecks,avgMultiSSTChecks,"
+                 "avgSingleBloomChecks,avgSingleLeafBloomChecks,avgSingleNonLeafBloomChecks,avgSingleSSTChecks,"
+                 "avgRealMultiBloomChecks,avgRealMultiSSTChecks,avgFalseMultiBloomChecks,avgFalseMultiSSTChecks");
+
     std::ofstream comprehensive_checks("csv/exp_1_comprehensive_checks.csv", std::ios::app);
+
+    writeCsvHeader("csv/exp_1_per_column_stats.csv",
+                 "dbSize,realDataPercentage,numColumns,"
+                 "avgMultiBloomPerCol,avgMultiLeafPerCol,avgMultiNonLeafPerCol,avgMultiSSTPerCol,"
+                 "avgSingleBloomPerCol,avgSingleLeafPerCol,avgSingleNonLeafPerCol,avgSingleSSTPerCol,"
+                 "avgRealMultiBloomPerCol,avgRealMultiSSTPerCol,avgFalseMultiBloomPerCol,avgFalseMultiSSTPerCol");
+
     std::ofstream per_column_stats("csv/exp_1_per_column_stats.csv", std::ios::app);
+
+    writeCsvHeader("csv/expJ1.csv",
+                 "dbSize,realDataPercentage,cardinality,"
+                 "avgRealMultiTime,avgRealSingleTime,avgRealHashIndexTime,"
+                 "avgHierarchicalMultiTime,avgHierarchicalSingleTime,avgHashIndexTimeTime");
+
     std::ofstream expJ1("csv/expJ1.csv", std::ios::app);
 
 
@@ -259,24 +226,24 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
         mixed_query_summary << dbSize << ","
                            << result.realDataPercentage << "," << result.totalQueries << ","
                            << result.realQueries << "," << result.falseQueries << ","
-                           << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << ","
+                           << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "," << result.avgHashIndexTime << ","
                            << result.avgMultiBloomChecks << "," << result.avgMultiSSTChecks << "\n";
       }
 
       // Timing comparison (8 columns)
       if (timing_comparison) {
         timing_comparison << dbSize << "," << result.realDataPercentage << "," << config.cardinality << "," 
-                         << result.avgRealDataMultiTime << "," << result.avgRealDataSingleTime << ","
-                         << result.avgFalseDataMultiTime << "," << result.avgFalseDataSingleTime << ","
-                         << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "\n";
+                         << result.avgRealDataMultiTime << "," << result.avgRealDataSingleTime << "," << result.avgRealHashIndexTime << ","
+                         << result.avgFalseDataMultiTime << "," << result.avgFalseDataSingleTime << "," << result.avgFalseHashIndexTime << ","
+                         << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "," << result.avgHashIndexTime << "\n";
       }
 
 
       if (expJ1){
         expJ1 << dbSize << "," << result.realDataPercentage << ","
               << config.cardinality << ","
-              << result.avgRealDataMultiTime << "," << result.avgRealDataSingleTime << ","
-              << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "\n";
+              << result.avgRealDataMultiTime << "," << result.avgRealDataSingleTime << "," << result.avgRealHashIndexTime << ","
+              << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "," << result.avgHashIndexTime << "\n";
       }
 
       // Comprehensive checks (14 columns)
