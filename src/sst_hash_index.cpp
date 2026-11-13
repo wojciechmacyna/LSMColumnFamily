@@ -19,16 +19,22 @@ constexpr std::array<char, 8> MAGIC = {
     'S', 'S', 'T', 'H', 'I', 'D', 'X', '1'
 };
 
-constexpr uint32_t FORMAT_VERSION = 1;
+constexpr uint32_t FORMAT_VERSION = 2;
 
 template <typename T>
-void writeValue(std::ostream& out, const T& value) {
+void writeValue(
+    std::ostream& out,
+    const T& value,
+    const std::string& field = "unknown") {
+
     out.write(
         reinterpret_cast<const char*>(&value),
         sizeof(T));
 
     if (!out) {
-        throw std::runtime_error("Cannot write hash index");
+        throw std::runtime_error(
+            "Cannot write hash index field: " + field +
+            ", bytes: " + std::to_string(sizeof(T)));
     }
 }
 
@@ -103,6 +109,7 @@ bool SSTHashIndex::exists(const std::string& indexPath) {
     return std::filesystem::exists(indexPath);
 }
 
+
 void SSTHashIndex::build(
     const std::string& sstPath,
     const std::string& indexPath,
@@ -124,7 +131,6 @@ void SSTHashIndex::build(
         std::vector<std::string>> valueToKeys;
 
     rocksdb::Options options;
-
     rocksdb::SstFileReader reader(options);
 
     rocksdb::Status status = reader.Open(sstPath);
@@ -167,10 +173,8 @@ void SSTHashIndex::build(
     for (auto& [value, keys] : valueToKeys) {
 
         uint64_t hash = hashValue(value);
-
         uint64_t bucketId = hash % bucketCount;
 
-        // A key should occur only once in a posting list.
         std::sort(keys.begin(), keys.end());
 
         keys.erase(
@@ -188,7 +192,6 @@ void SSTHashIndex::build(
         ++totalEntries;
     }
 
-    // We no longer need the aggregation map.
     valueToKeys.clear();
     valueToKeys.rehash(0);
 
@@ -215,7 +218,6 @@ void SSTHashIndex::build(
          ++bucketId) {
 
         auto& entries = bucketEntries[bucketId];
-
         auto& diskBucket = diskEntries[bucketId];
 
         diskBucket.reserve(entries.size());
@@ -228,8 +230,16 @@ void SSTHashIndex::build(
             diskEntry.value = entry.value;
             diskEntry.postingCount = entry.keys.size();
 
+            const std::streampos postingPosition =
+                postingFile.tellp();
+
+            if (postingPosition == std::streampos(-1)) {
+                throw std::runtime_error(
+                    "Cannot get posting file position");
+            }
+
             diskEntry.postingOffset =
-                static_cast<uint64_t>(postingFile.tellp());
+                static_cast<uint64_t>(postingPosition);
 
             for (const auto& key : entry.keys) {
                 writeString(postingFile, key);
@@ -252,7 +262,8 @@ void SSTHashIndex::build(
     // 4. Write final index file.
     // ---------------------------------------------------------
 
-    const std::string indexTempPath = indexPath + ".tmp";
+    const std::string indexTempPath =
+        indexPath + ".tmp";
 
     std::ofstream indexFile(
         indexTempPath,
@@ -266,22 +277,48 @@ void SSTHashIndex::build(
     // Header.
     indexFile.write(MAGIC.data(), MAGIC.size());
 
-    writeValue(indexFile, FORMAT_VERSION);
-    writeValue(indexFile, bucketCount);
-    writeValue(indexFile, totalEntries);
+    if (!indexFile) {
+        throw std::runtime_error(
+            "Cannot write hash index magic");
+    }
+
+    writeValue(indexFile, FORMAT_VERSION, "FORMAT_VERSION");
+    writeValue(indexFile, bucketCount, "bucketCount");
+    writeValue(indexFile, totalEntries, "totalEntries");
+
+    // Reserve postingStart in header.
+    const std::streampos postingStartPosition =
+        indexFile.tellp();
+
+    if (postingStartPosition == std::streampos(-1)) {
+        throw std::runtime_error(
+            "Cannot get postingStart header position");
+    }
+
+    const uint64_t postingStartPlaceholder = 0;
+
+    writeValue(
+        indexFile,
+        postingStartPlaceholder,
+        "postingStart placeholder");
 
     // Reserve bucket directory.
-    const uint64_t directoryStart =
-        static_cast<uint64_t>(indexFile.tellp());
+    const std::streampos directoryPosition =
+        indexFile.tellp();
 
-    const uint64_t directorySize =
-        bucketCount * (sizeof(uint64_t) * 2);
+    if (directoryPosition == std::streampos(-1)) {
+        throw std::runtime_error(
+            "Cannot get directory position");
+    }
+
+    const uint64_t directoryStart =
+        static_cast<uint64_t>(directoryPosition);
 
     std::vector<BucketInfo> directory(bucketCount);
 
     for (uint64_t i = 0; i < bucketCount; ++i) {
-        writeValue(indexFile, directory[i].offset);
-        writeValue(indexFile, directory[i].count);
+        writeValue(indexFile, directory[i].offset, "directory.offset");
+        writeValue(indexFile, directory[i].count, "directory.count");
     }
 
     // Write bucket entries.
@@ -289,66 +326,116 @@ void SSTHashIndex::build(
          bucketId < bucketCount;
          ++bucketId) {
 
+        const std::streampos bucketPosition =
+            indexFile.tellp();
+
+        if (bucketPosition == std::streampos(-1)) {
+            throw std::runtime_error(
+                "Cannot get bucket position");
+        }
+
         directory[bucketId].offset =
-            static_cast<uint64_t>(indexFile.tellp());
+            static_cast<uint64_t>(bucketPosition);
 
         directory[bucketId].count =
             diskEntries[bucketId].size();
 
         for (const auto& entry : diskEntries[bucketId]) {
 
-            writeValue(indexFile, entry.hash);
+            writeValue(indexFile, entry.hash, "entry.hash");
 
-            uint32_t valueLength =
+            const uint32_t valueLength =
                 static_cast<uint32_t>(entry.value.size());
 
-            writeValue(indexFile, valueLength);
-
-            writeValue(indexFile, entry.postingOffset);
-            writeValue(indexFile, entry.postingCount);
+            writeValue(indexFile, valueLength, "valueLength");
+            writeValue(indexFile, entry.postingOffset, "postingOffset");
+            writeValue(indexFile, entry.postingCount, "postingCount");
 
             indexFile.write(
                 entry.value.data(),
-                valueLength);
+                static_cast<std::streamsize>(valueLength));
 
             if (!indexFile) {
                 throw std::runtime_error(
-                    "Cannot write hash entry");
+                    "Cannot write hash entry value");
             }
         }
     }
 
-    // The posting region begins immediately after metadata.
-    const uint64_t postingStart =
-        static_cast<uint64_t>(indexFile.tellp());
+    // ---------------------------------------------------------
+    // 5. Write postingStart into header and append postings.
+    // ---------------------------------------------------------
 
-    // Append posting lists.
+    const std::streampos metadataEnd =
+        indexFile.tellp();
+
+    if (metadataEnd == std::streampos(-1)) {
+        throw std::runtime_error(
+            "Cannot get metadata end position");
+    }
+
+    const uint64_t postingStart =
+        static_cast<uint64_t>(metadataEnd);
+
+    // Open temporary postings file.
     std::ifstream postingInput(
         postingTempPath,
         std::ios::binary);
 
     if (!postingInput) {
         throw std::runtime_error(
-            "Cannot reopen temporary postings file");
+            "Cannot open temporary postings file");
     }
 
+    // Update postingStart in header.
+    indexFile.seekp(postingStartPosition);
+
+    if (!indexFile) {
+        throw std::runtime_error(
+            "Cannot seek to postingStart position");
+    }
+
+    writeValue(indexFile, postingStart, "postingStart");
+
+    // Return to the end of metadata.
+    indexFile.seekp(metadataEnd);
+
+    if (!indexFile) {
+        throw std::runtime_error(
+            "Cannot seek back to metadata end");
+    }
+
+    // Append posting lists.
     indexFile << postingInput.rdbuf();
 
     if (!indexFile) {
         throw std::runtime_error(
-            "Cannot append postings to index");
+            "Cannot append posting lists");
     }
 
+    postingInput.close();
+
     // ---------------------------------------------------------
-    // 5. Rewrite bucket directory with actual offsets.
+    // 6. Rewrite bucket directory with actual offsets.
     // ---------------------------------------------------------
 
-    indexFile.seekp(directoryStart);
+    indexFile.seekp(
+        static_cast<std::streamoff>(directoryStart));
+
+    if (!indexFile) {
+        throw std::runtime_error(
+            "Cannot seek to directory position");
+    }
 
     for (const auto& bucket : directory) {
-        writeValue(indexFile, bucket.offset);
-        writeValue(indexFile, bucket.count);
+
+        writeValue(indexFile, bucket.offset, "bucket.offset");
+        writeValue(indexFile, bucket.count, "bucket.count");
     }
+
+    // ---------------------------------------------------------
+    // 7. Finalize index file.
+    // ---------------------------------------------------------
 
     indexFile.flush();
 
@@ -359,13 +446,30 @@ void SSTHashIndex::build(
 
     indexFile.close();
 
-    postingInput.close();
+    if (indexFile.fail()) {
+        throw std::runtime_error(
+            "Cannot close hash index file");
+    }
 
-    // Replace old index only after successful construction.
+    // ---------------------------------------------------------
+    // 8. Replace old index only after successful construction.
+    // ---------------------------------------------------------
+
     std::error_code ec;
 
     std::filesystem::remove(indexPath, ec);
-    std::filesystem::rename(indexTempPath, indexPath);
+
+    ec.clear();
+
+    std::filesystem::rename(
+        indexTempPath,
+        indexPath,
+        ec);
+
+    if (ec) {
+        throw std::runtime_error(
+            "Cannot rename hash index file: " + ec.message());
+    }
 
     std::filesystem::remove(postingTempPath, ec);
 
@@ -376,6 +480,7 @@ void SSTHashIndex::build(
               << ", posting start: " << postingStart
               << std::endl;
 }
+
 
 bool SSTHashIndex::open(const std::string& indexPath) {
 
@@ -399,69 +504,68 @@ bool SSTHashIndex::open(const std::string& indexPath) {
     readValue(file, version);
     readValue(file, bucketCount);
     readValue(file, entryCount_);
+    readValue(file, postingStart_);
 
-    if (version != FORMAT_VERSION || bucketCount == 0) {
+    if (!file ||
+        version != FORMAT_VERSION ||
+        bucketCount == 0) {
         return false;
     }
 
+    buckets_.clear();
     buckets_.resize(bucketCount);
 
     for (auto& bucket : buckets_) {
         readValue(file, bucket.offset);
         readValue(file, bucket.count);
-    }
 
-    // Determine the start of posting lists.
-    uint64_t metadataEnd = 0;
-
-    for (const auto& bucket : buckets_) {
-        if (bucket.offset > metadataEnd) {
-            metadataEnd = bucket.offset;
+        if (!file) {
+            buckets_.clear();
+            return false;
         }
     }
 
-    // Find the end of the last bucket's metadata.
-    // The end is calculated by reading all entries.
+    // Validate posting region.
+    file.seekg(0, std::ios::end);
+
+    if (!file) {
+        buckets_.clear();
+        return false;
+    }
+
+    const uint64_t fileSize =
+        static_cast<uint64_t>(file.tellg());
+
+    const uint64_t directoryEnd =
+        8 + sizeof(uint32_t) +
+        sizeof(uint64_t) * 3 +
+        bucketCount * sizeof(uint64_t) * 2;
+
+    if (postingStart_ < directoryEnd ||
+        postingStart_ > fileSize) {
+        buckets_.clear();
+        return false;
+    }
+
     for (const auto& bucket : buckets_) {
 
         if (bucket.count == 0) {
             continue;
         }
 
-        file.seekg(bucket.offset);
-
-        for (uint64_t i = 0; i < bucket.count; ++i) {
-
-            uint64_t hash = 0;
-            uint32_t valueLength = 0;
-            uint64_t postingOffset = 0;
-            uint64_t postingCount = 0;
-
-            readValue(file, hash);
-            readValue(file, valueLength);
-            readValue(file, postingOffset);
-            readValue(file, postingCount);
-
-            file.seekg(valueLength, std::ios::cur);
-
-            if (!file) {
-                return false;
-            }
-
-            auto position =
-                static_cast<uint64_t>(file.tellg());
-
-            metadataEnd = std::max(metadataEnd, position);
+        if (bucket.offset < directoryEnd ||
+            bucket.offset >= postingStart_) {
+            buckets_.clear();
+            return false;
         }
     }
-
-    postingStart_ = metadataEnd;
 
     indexPath_ = indexPath;
     opened_ = true;
 
     return true;
 }
+
 
 bool SSTHashIndex::lookup(
     const std::string& value,

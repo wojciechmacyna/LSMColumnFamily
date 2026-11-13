@@ -70,7 +70,7 @@ int main(int argc, char* argv[]) {
 
   const std::string sharedDbName = baseDir + "/shared_exp_db";
   const std::vector<std::string> defaultColumns = {"phone", "mail", "address"};
-  const int defaultNumRecords = 10000000;
+  const int defaultNumRecords = 80000000;
 
   try {
     // run section- test

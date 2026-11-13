@@ -37,7 +37,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
   const int numStandardQueries = 3;
 
   // Run comprehensive analysis across different real data percentages
-  const int numQueriesPerScenario = 3;
+  const int numQueriesPerScenario = 10;
 
   DBManager dbManager;
   BloomManager bloomManager;
