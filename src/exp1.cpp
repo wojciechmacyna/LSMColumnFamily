@@ -30,11 +30,11 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
 
 
   const std::vector<std::string> columns = {"phone", "mail", "address"};
-  //const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 50'000'000, 500'000'000};
-  const std::vector<int> dbSizes = {defaultNumRecords};
+  const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 50'000'000, 500'000'000};
+  //const std::vector<int> dbSizes = {defaultNumRecords};
 
   // Run stundard queries            
-  const int numStandardQueries = 3;
+  const int numStandardQueries = 5;
 
   // Run comprehensive analysis across different real data percentages
   const int numQueriesPerScenario = 10;
