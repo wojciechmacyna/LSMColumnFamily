@@ -205,41 +205,6 @@ bool BloomTree::validateTree(std::string& error) const
 
 
 
-// Previous
-/*void BloomTree::buildLevel(std::vector<Node*>& nodes) {
-    if (nodes.size() == 1) {
-        root = std::move(nodes.front());
-        return;
-    }
-
-    std::vector<Node*> parentLevel;
-
-    for (size_t i = 0; i < nodes.size(); i += ratio) {
-        size_t end = std::min(i + ratio, nodes.size());
-
-        Node* parent = new Node(BloomFilter(bloomSize, numHashFunctions), "Memory",
-                                nodes[i]->startKey, nodes[end - 1]->endKey);
-
-        for (size_t j = i; j < end; ++j) {
-            if (parent->startKey > nodes[j]->startKey) {
-                parent->startKey = nodes[j]->startKey;
-            }
-            if (parent->endKey < nodes[j]->endKey) {
-                parent->endKey = nodes[j]->endKey;
-            }
-            parent->bloom.merge(nodes[j]->bloom);
-            parent->children.push_back(std::move(nodes[j]));
-        }
-
-        parentLevel.push_back(parent);
-    }
-
-    buildLevel(parentLevel);
-}
-*/
-
-
-
 void BloomTree::buildLevel(std::vector<Node*>& nodes) {
     if (nodes.empty()) {
         root = nullptr;
