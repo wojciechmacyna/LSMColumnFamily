@@ -59,6 +59,9 @@ struct MixedQueryResult {
   long long hierarchicalMultiTime;
   long long hierarchicalSingleTime;
   long long hashIndexTime;
+  long long hashSingleIndexTime;
+  long long hashSingleHierarchyIndexTime;
+
   size_t multiCol_bloomChecks;
   size_t multiCol_leafBloomChecks;
   size_t multiCol_sstChecks;
@@ -92,12 +95,18 @@ struct AccumulatedQueryMetrics {
   double avgHierarchicalMultiTime;
   double avgHierarchicalSingleTime;
   double avgHashIndexTime;
+  double avgHashSingleIndexTime;
+  double avgHashSingleHierarchyIndexTime;
   double avgRealDataMultiTime;
   double avgRealDataSingleTime;
   double avgRealHashIndexTime;
+  double avgRealHashSingleIndexTime;
+  double avgRealHashSingleHierarchyIndexTime;
   double avgFalseDataMultiTime;
   double avgFalseDataSingleTime;
   double avgFalseHashIndexTime;
+  double avgFalseHashSingleIndexTime;
+    double avgFalseHashSingleHierachyIndexTime;
   
   // Average check metrics
   double avgMultiBloomChecks;

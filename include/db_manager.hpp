@@ -13,6 +13,7 @@
 
 #include "bloom_tree.hpp"
 #include "listener.hpp"
+#include "sst_hash_index.hpp"
 
 enum class DataDistribution {
   Normal,
@@ -66,6 +67,17 @@ std::vector<std::string> getChangedSSTFilesForColumn(
     const std::string& dbname,
     const std::string& column
 );
+
+std::vector<std::string> findUsingSingleHierarchyAndHashIndexes(
+    BloomTree& hierarchy,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values);
+
+std::vector<std::string> findUsingHashIndexesSingleColumn(
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    const std::map<std::string, std::vector<std::string>>& columnSstFiles);
+
 
 std::vector<std::string> findUsingHashIndexes(
     const std::vector<std::string>& columns,

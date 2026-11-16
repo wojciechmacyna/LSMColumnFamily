@@ -33,6 +33,355 @@
 
 extern boost::asio::thread_pool globalThreadPool;
 
+
+std::vector<std::string>
+DBManager::findUsingSingleHierarchyAndHashIndexes(
+    BloomTree& hierarchy,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values)
+{
+    if (columns.size() != values.size() || columns.empty()) {
+        throw std::runtime_error(
+            "Number of columns and values must be equal and non-empty.");
+    }
+
+    StopWatch totalWatch;
+    totalWatch.start();
+
+    uint64_t bloomTime = 0;
+    uint64_t hashTime = 0;
+    uint64_t verificationTime = 0;
+
+    // --------------------------------------------------
+    // 1. Wyszukanie kandydatów w BloomTree
+    // --------------------------------------------------
+
+    StopWatch bloomWatch;
+    bloomWatch.start();
+
+    std::vector<const Node*> candidates =
+        hierarchy.queryNodes(values[0], "", "");
+
+    if (candidates.empty()) {
+        bloomWatch.stop();
+        totalWatch.stop();
+
+        spdlog::info(
+            "BloomSingle + Hash: no candidates. "
+            "Bloom: {} us, total: {} us",
+            bloomWatch.elapsedMicros(),
+            totalWatch.elapsedMicros());
+
+        return {};
+    }
+
+    // --------------------------------------------------
+    // 2. Grupowanie liści według plików SST
+    // --------------------------------------------------
+
+    std::map<std::string, std::vector<SSTRange>> sstRanges;
+
+    for (const Node* node : candidates) {
+        sstRanges[node->filename].push_back({
+            node->startKey,
+            node->endKey
+        });
+    }
+
+    bloomWatch.stop();
+    bloomTime = bloomWatch.elapsedMicros();
+
+    // --------------------------------------------------
+    // 3. Wyszukiwanie w Hash Indexach wybranych SST
+    // --------------------------------------------------
+
+    std::vector<std::string> allKeys;
+
+    uint64_t openedIndexes = 0;
+    uint64_t failedIndexes = 0;
+    uint64_t hashReturnedKeys = 0;
+
+    StopWatch hashWatch;
+    hashWatch.start();
+
+    for (const auto& [filename, ranges] : sstRanges) {
+
+        const std::string indexPath =
+            filename + "." + columns[0] + ".hidx";
+
+        SSTHashIndex hashIndex;
+
+        if (!hashIndex.open(indexPath)) {
+            ++failedIndexes;
+
+            spdlog::warn(
+                "Cannot open Hash Index: {}",
+                indexPath);
+
+            continue;
+        }
+
+        ++openedIndexes;
+
+        std::vector<std::string> keys;
+
+        if (!hashIndex.lookup(values[0], keys)) {
+            spdlog::warn(
+                "Hash Index lookup failed: {}",
+                indexPath);
+
+            continue;
+        }
+
+        hashReturnedKeys += keys.size();
+
+        // Zachowanie zakresów wybranych przez BloomTree.
+        for (const auto& key : keys) {
+
+            bool inRange = false;
+
+            for (const auto& range : ranges) {
+
+                if (key >= range.startKey &&
+                    key <= range.endKey) {
+
+                    inRange = true;
+                    break;
+                }
+            }
+
+            if (inRange) {
+                allKeys.push_back(key);
+            }
+        }
+    }
+
+    hashWatch.stop();
+    hashTime = hashWatch.elapsedMicros();
+
+    // --------------------------------------------------
+    // 4. Usuwanie duplikatów
+    // --------------------------------------------------
+
+    std::sort(allKeys.begin(), allKeys.end());
+
+    allKeys.erase(
+        std::unique(allKeys.begin(), allKeys.end()),
+        allKeys.end());
+
+    // --------------------------------------------------
+    // 5. Weryfikacja kluczy we wszystkich kolumnach
+    // --------------------------------------------------
+
+    StopWatch verificationWatch;
+    verificationWatch.start();
+
+    std::vector<std::string> matchingKeys;
+
+    for (const auto& key : allKeys) {
+
+        bool matches = true;
+
+        for (size_t i = 0; i < columns.size(); ++i) {
+
+            auto cfIt = cf_handles_.find(columns[i]);
+
+            if (cfIt == cf_handles_.end()) {
+                throw std::runtime_error(
+                    "Column Family not found: " + columns[i]);
+            }
+
+            std::string dbValue;
+
+            rocksdb::ReadOptions readOptions;
+
+            auto status = db_->Get(
+                readOptions,
+                cfIt->second.get(),
+                key,
+                &dbValue);
+
+            if (!status.ok() || dbValue != values[i]) {
+                matches = false;
+                break;
+            }
+        }
+
+        if (matches) {
+            matchingKeys.push_back(key);
+        }
+    }
+
+    verificationWatch.stop();
+    verificationTime = verificationWatch.elapsedMicros();
+
+    // --------------------------------------------------
+    // 6. Podsumowanie
+    // --------------------------------------------------
+
+    totalWatch.stop();
+
+    spdlog::info(
+        "BloomSingle + Hash completed. "
+        "Bloom candidates: {}, SST files: {}, "
+        "Opened indexes: {}, Failed indexes: {}, "
+        "Hash returned keys: {}, Unique keys: {}, "
+        "Matching keys: {}, "
+        "Bloom: {} us, Hash: {} us, "
+        "Verification: {} us, Total: {} us",
+        candidates.size(),
+        sstRanges.size(),
+        openedIndexes,
+        failedIndexes,
+        hashReturnedKeys,
+        allKeys.size(),
+        matchingKeys.size(),
+        bloomTime,
+        hashTime,
+        verificationTime,
+        totalWatch.elapsedMicros());
+
+    return matchingKeys;
+}
+
+
+std::vector<std::string> DBManager::findUsingHashIndexesSingleColumn(
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    const std::map<std::string, std::vector<std::string>>& columnSstFiles)
+{
+    if (columns.empty() || columns.size() != values.size()) {
+        throw std::runtime_error(
+            "Number of columns and values must be equal and non-empty.");
+    }
+
+    StopWatch sw;
+    sw.start();
+
+    // --------------------------------------------------
+    // 1. Search Hash Indexes of the first column only
+    // --------------------------------------------------
+
+    const auto& firstColumn = columns[0];
+    const auto& firstValue = values[0];
+
+    auto filesIt = columnSstFiles.find(firstColumn);
+
+    if (filesIt == columnSstFiles.end()) {
+        throw std::runtime_error(
+            "No SST files registered for column: " + firstColumn);
+    }
+
+    const auto& sstFiles = filesIt->second;
+
+    spdlog::info(
+        "Searching Hash Indexes for first column '{}', value '{}'. "
+        "Number of SST files: {}",
+        firstColumn,
+        firstValue,
+        sstFiles.size());
+
+    // --------------------------------------------------
+    // 2. Search all Hash Indexes of the first column
+    // --------------------------------------------------
+
+    std::unordered_set<std::string> uniqueKeys;
+
+    for (const auto& sstFile : sstFiles) {
+
+        const std::string indexPath =
+            sstFile + "." + firstColumn + ".hidx";
+
+        SSTHashIndex index;
+
+        if (!index.open(indexPath)) {
+            throw std::runtime_error(
+                "Cannot open hash index: " + indexPath);
+        }
+
+        std::vector<std::string> keys;
+
+        if (!index.lookup(firstValue, keys)) {
+            throw std::runtime_error(
+                "Hash index lookup failed: " + indexPath);
+        }
+
+        uniqueKeys.insert(
+            std::make_move_iterator(keys.begin()),
+            std::make_move_iterator(keys.end()));
+    }
+
+    spdlog::info(
+        "Number of unique candidate keys found: {}",
+        uniqueKeys.size());
+
+    // --------------------------------------------------
+    // 3. Verify candidates against all queried columns
+    // --------------------------------------------------
+
+    std::vector<std::string> matchingKeys;
+
+    for (const auto& key : uniqueKeys) {
+
+        bool matches = true;
+
+        for (size_t i = 0; i < columns.size(); ++i) {
+
+            auto handleIt = cf_handles_.find(columns[i]);
+
+            if (handleIt == cf_handles_.end()) {
+                throw std::runtime_error(
+                    "Unknown column family: " + columns[i]);
+            }
+
+            std::string currentValue;
+
+            rocksdb::Status status = db_->Get(
+                rocksdb::ReadOptions(),
+                handleIt->second.get(),
+                key,
+                &currentValue);
+
+            if (!status.ok() || currentValue != values[i]) {
+                matches = false;
+                break;
+            }
+        }
+
+        if (matches) {
+            matchingKeys.push_back(key);
+        }
+    }
+
+    // --------------------------------------------------
+    // 4. Sort results
+    // --------------------------------------------------
+
+    std::sort(
+        matchingKeys.begin(),
+        matchingKeys.end());
+
+    // --------------------------------------------------
+    // 5. Summary
+    // --------------------------------------------------
+
+    sw.stop();
+
+    spdlog::info(
+        "findUsingHashIndexesSingleColumn completed. "
+        "First column: {}, SST files: {}, "
+        "Unique keys: {}, Matching keys: {}, Time: {} us",
+        firstColumn,
+        sstFiles.size(),
+        uniqueKeys.size(),
+        matchingKeys.size(),
+        sw.elapsedMicros());
+
+    return matchingKeys;
+}
+
+
+
 std::vector<std::string> DBManager::findUsingHashIndexes(
     const std::vector<std::string>& columns,
     const std::vector<std::string>& values,

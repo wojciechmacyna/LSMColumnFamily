@@ -28,6 +28,9 @@ extern std::atomic<size_t> gSSTCheckCount;
 uint64_t buildHashIndexesAsync(
     const std::map<std::string, std::vector<std::string>>& columnSstFiles) {
 
+    // Diagnostic test: build hash indexes sequentially.
+    boost::asio::thread_pool hashIndexPool(1);
+
     std::vector<std::future<uint64_t>> futures;
 
     for (const auto& [column, sstFiles] : columnSstFiles) {
@@ -39,7 +42,7 @@ uint64_t buildHashIndexesAsync(
             std::string indexPath = filename + "." + column + ".hidx";
 
             boost::asio::post(
-                globalThreadPool,
+                hashIndexPool,
                 [filename, indexPath,
                  promise = std::move(promise)]() mutable {
                     try {
@@ -59,6 +62,9 @@ uint64_t buildHashIndexesAsync(
         }
     }
 
+    // Wait until all tasks have completed.
+    hashIndexPool.join();
+
     uint64_t totalSize = 0;
 
     for (auto& future : futures) {
@@ -67,6 +73,7 @@ uint64_t buildHashIndexesAsync(
 
     return totalSize;
 }
+
 
 
 std::map<std::string, std::vector<std::string>> scanSstFilesAsync(
@@ -1132,6 +1139,25 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     auto resultsData = dbManager.findUsingHashIndexes(columns,currentExpectedValues,*columnSstFiles);
     stopwatch.stop();
     result.hashIndexTime = stopwatch.elapsedMicros();
+
+
+        // --- Hash Single Index Scan ---
+  
+    stopwatch.start();
+    auto resultsDataSingleHash = dbManager.findUsingHashIndexesSingleColumn(columns,currentExpectedValues,*columnSstFiles);
+    stopwatch.stop();
+    result.hashSingleIndexTime = stopwatch.elapsedMicros();
+
+
+
+        // --- Hash Single Hierarchy Index Scan ---
+  
+    stopwatch.start();
+
+  auto resultsDataSingleHashHierarchy =
+    dbManager.findUsingSingleHierarchyAndHashIndexes(queryTrees[0], columns, currentExpectedValues);
+    stopwatch.stop();
+    result.hashSingleHierarchyIndexTime = stopwatch.elapsedMicros();
   
 
     // --- Hierarchical Multi-Column Query ---
@@ -1197,7 +1223,7 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
   std::vector<AccumulatedQueryMetrics> accumulatedResults;
   
   // Define the real data percentages to test
-  std::vector<double> realDataPercentages = {0.0, 20.0, 40.0, 60.0, 80.0, 100.0};
+  std::vector<double> realDataPercentages = {0.0, 10.0, 20.0, 40.0, 60.0, 80.0, 100.0};
   
   spdlog::info("runComprehensiveQueryAnalysis: Starting comprehensive analysis with {} queries per scenario", 
                numQueriesPerScenario);
@@ -1223,9 +1249,9 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     metrics.numColumns = columns.size();
     
     // Initialize sums for averaging
-    long long totalMultiTime = 0, totalSingleTime = 0, totalHashIndexTime = 0;
-    long long realMultiTimeSum = 0, realSingleTimeSum = 0, realHashIndexTimeSum = 0;
-    long long falseMultiTimeSum = 0, falseSingleTimeSum = 0, falseHashIndexTimeSum = 0;
+    long long totalMultiTime = 0, totalSingleTime = 0, totalHashIndexTime = 0, totalHashSingleIndexTime = 0, totalHashSingleHierarchyIndexTime = 0;
+    long long realMultiTimeSum = 0, realSingleTimeSum = 0, realHashIndexTimeSum = 0, realHashSingleIndexTimeSum = 0 , realHashSingleHierarchyIndexTimeSum = 0;
+    long long falseMultiTimeSum = 0, falseSingleTimeSum = 0, falseHashIndexTimeSum = 0, falseHashSingleIndexTimeSum = 0, falseHashSingleHierarchyIndexTimeSum = 0 ;
     
     size_t totalMultiBloomChecks = 0, totalMultiLeafBloomChecks = 0, totalMultiSSTChecks = 0;
     size_t totalSingleBloomChecks = 0, totalSingleLeafBloomChecks = 0, totalSingleSSTChecks = 0;
@@ -1239,6 +1265,8 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
       totalMultiTime += result.hierarchicalMultiTime;
       totalSingleTime += result.hierarchicalSingleTime;
       totalHashIndexTime += result.hashIndexTime;
+      totalHashSingleIndexTime += result.hashSingleIndexTime;
+      totalHashSingleHierarchyIndexTime += result.hashSingleHierarchyIndexTime;
 
       totalMultiBloomChecks += result.multiCol_bloomChecks;
       totalMultiLeafBloomChecks += result.multiCol_leafBloomChecks;
@@ -1250,27 +1278,39 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
       totalSingleNonLeafBloomChecks += result.singleCol_nonLeafBloomChecks;
       
       if (result.isRealData) {
-        metrics.realQueries++;
-        realMultiTimeSum += result.hierarchicalMultiTime;
-        realSingleTimeSum += result.hierarchicalSingleTime;
-        realHashIndexTimeSum += result.hashIndexTime;
-        realMultiBloomChecksSum += result.multiCol_bloomChecks;
-        realMultiSSTChecksSum += result.multiCol_sstChecks;
-      } else {
-        metrics.falseQueries++;
-        falseMultiTimeSum += result.hierarchicalMultiTime;
-        falseSingleTimeSum += result.hierarchicalSingleTime;
-        falseHashIndexTimeSum += result.hashIndexTime;
-        falseMultiBloomChecksSum += result.multiCol_bloomChecks;
-        falseMultiSSTChecksSum += result.multiCol_sstChecks;
-      }
+    metrics.realQueries++;
+
+    realMultiTimeSum += result.hierarchicalMultiTime;
+    realSingleTimeSum += result.hierarchicalSingleTime;
+    realHashIndexTimeSum += result.hashIndexTime;
+    realHashSingleIndexTimeSum += result.hashSingleIndexTime;
+    realHashSingleHierarchyIndexTimeSum +=
+        result.hashSingleHierarchyIndexTime;
+
+    realMultiBloomChecksSum += result.multiCol_bloomChecks;
+    realMultiSSTChecksSum += result.multiCol_sstChecks;
+} else {
+    metrics.falseQueries++;
+
+    falseMultiTimeSum += result.hierarchicalMultiTime;
+    falseSingleTimeSum += result.hierarchicalSingleTime;
+    falseHashIndexTimeSum += result.hashIndexTime;
+    falseHashSingleIndexTimeSum += result.hashSingleIndexTime;
+    falseHashSingleHierarchyIndexTimeSum +=
+        result.hashSingleHierarchyIndexTime;
+
+    falseMultiBloomChecksSum += result.multiCol_bloomChecks;
+    falseMultiSSTChecksSum += result.multiCol_sstChecks;
+}
     }
     
     // Calculate averages
     metrics.avgHierarchicalMultiTime = static_cast<double>(totalMultiTime) / metrics.totalQueries;
     metrics.avgHierarchicalSingleTime = static_cast<double>(totalSingleTime) / metrics.totalQueries;
     metrics.avgHashIndexTime =  static_cast<double>(totalHashIndexTime) / metrics.totalQueries;
-    
+    metrics.avgHashSingleIndexTime =  static_cast<double>(totalHashSingleIndexTime) / metrics.totalQueries;
+    metrics.avgHashSingleHierarchyIndexTime =  static_cast<double>(totalHashSingleHierarchyIndexTime) / metrics.totalQueries;
+
     metrics.avgMultiBloomChecks = static_cast<double>(totalMultiBloomChecks) / metrics.totalQueries;
     metrics.avgMultiLeafBloomChecks = static_cast<double>(totalMultiLeafBloomChecks) / metrics.totalQueries;
     metrics.avgMultiSSTChecks = static_cast<double>(totalMultiSSTChecks) / metrics.totalQueries;
@@ -1296,37 +1336,63 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
       metrics.avgRealDataMultiTime = static_cast<double>(realMultiTimeSum) / metrics.realQueries;
       metrics.avgRealDataSingleTime = static_cast<double>(realSingleTimeSum) / metrics.realQueries;
       metrics.avgRealHashIndexTime = static_cast<double>(realHashIndexTimeSum) / metrics.realQueries;
+      metrics.avgRealHashSingleIndexTime = static_cast<double>(realHashSingleIndexTimeSum) / metrics.realQueries;
+      metrics.avgRealHashSingleHierarchyIndexTime = static_cast<double>(realHashSingleHierarchyIndexTimeSum) / metrics.realQueries;
       metrics.avgRealMultiBloomChecks = static_cast<double>(realMultiBloomChecksSum) / metrics.realQueries;
       metrics.avgRealMultiSSTChecks = static_cast<double>(realMultiSSTChecksSum) / metrics.realQueries;
       metrics.avgRealMultiBloomChecksPerColumn = metrics.avgRealMultiBloomChecks / numCols;
       metrics.avgRealMultiSSTChecksPerColumn = metrics.avgRealMultiSSTChecks / numCols;
     } else {
-      metrics.avgRealDataMultiTime = 0.0;
-      metrics.avgRealDataSingleTime = 0.0;
-      metrics.avgRealHashIndexTime = 0.0;
-      metrics.avgRealMultiBloomChecks = 0.0;
-      metrics.avgRealMultiSSTChecks = 0.0;
-      metrics.avgRealMultiBloomChecksPerColumn = 0.0;
-      metrics.avgRealMultiSSTChecksPerColumn = 0.0;
+        metrics.avgRealDataMultiTime = 0.0;
+        metrics.avgRealDataSingleTime = 0.0;
+        metrics.avgRealHashIndexTime = 0.0;
+        metrics.avgRealHashSingleIndexTime = 0.0;
+        metrics.avgRealHashSingleHierarchyIndexTime = 0.0;
+
+        metrics.avgRealMultiBloomChecks = 0.0;
+        metrics.avgRealMultiSSTChecks = 0.0;
+        metrics.avgRealMultiBloomChecksPerColumn = 0.0;
+        metrics.avgRealMultiSSTChecksPerColumn = 0.0;
     }
     
     if (metrics.falseQueries > 0) {
-      metrics.avgFalseDataMultiTime = static_cast<double>(falseMultiTimeSum) / metrics.falseQueries;
-      metrics.avgFalseDataSingleTime = static_cast<double>(falseSingleTimeSum) / metrics.falseQueries;
-      metrics.avgFalseHashIndexTime = static_cast<double>(realHashIndexTimeSum) / metrics.falseQueries;
-      metrics.avgFalseMultiBloomChecks = static_cast<double>(falseMultiBloomChecksSum) / metrics.falseQueries;
-      metrics.avgFalseMultiSSTChecks = static_cast<double>(falseMultiSSTChecksSum) / metrics.falseQueries;
-      metrics.avgFalseMultiBloomChecksPerColumn = metrics.avgFalseMultiBloomChecks / numCols;
-      metrics.avgFalseMultiSSTChecksPerColumn = metrics.avgFalseMultiSSTChecks / numCols;
-    } else {
-      metrics.avgFalseDataMultiTime = 0.0;
-      metrics.avgFalseDataSingleTime = 0.0;
-      metrics.avgFalseHashIndexTime = 0.0;
-      metrics.avgFalseMultiBloomChecks = 0.0;
-      metrics.avgFalseMultiSSTChecks = 0.0;
-      metrics.avgFalseMultiBloomChecksPerColumn = 0.0;
-      metrics.avgFalseMultiSSTChecksPerColumn = 0.0;
-    }
+    metrics.avgFalseDataMultiTime =
+        static_cast<double>(falseMultiTimeSum) / metrics.falseQueries;
+
+    metrics.avgFalseDataSingleTime =
+        static_cast<double>(falseSingleTimeSum) / metrics.falseQueries;
+
+    metrics.avgFalseHashIndexTime =
+        static_cast<double>(falseHashIndexTimeSum) / metrics.falseQueries;
+
+    metrics.avgFalseHashSingleIndexTime =
+        static_cast<double>(falseHashSingleIndexTimeSum) / metrics.falseQueries;
+
+    metrics.avgFalseHashSingleHierachyIndexTime =
+        static_cast<double>(falseHashSingleHierarchyIndexTimeSum) / metrics.falseQueries;
+
+    metrics.avgFalseMultiBloomChecks =
+        static_cast<double>(falseMultiBloomChecksSum) / metrics.falseQueries;
+
+    metrics.avgFalseMultiSSTChecks =
+        static_cast<double>(falseMultiSSTChecksSum) / metrics.falseQueries;
+
+    metrics.avgFalseMultiBloomChecksPerColumn =
+        metrics.avgFalseMultiBloomChecks / numCols;
+
+    metrics.avgFalseMultiSSTChecksPerColumn =
+        metrics.avgFalseMultiSSTChecks / numCols;
+} else {
+    metrics.avgFalseDataMultiTime = 0.0;
+    metrics.avgFalseDataSingleTime = 0.0;
+    metrics.avgFalseHashIndexTime = 0.0;
+    metrics.avgFalseHashSingleIndexTime = 0.0;
+    metrics.avgFalseHashSingleHierachyIndexTime = 0.0;
+    metrics.avgFalseMultiBloomChecks = 0.0;
+    metrics.avgFalseMultiSSTChecks = 0.0;
+    metrics.avgFalseMultiBloomChecksPerColumn = 0.0;
+    metrics.avgFalseMultiSSTChecksPerColumn = 0.0;
+}
     
     accumulatedResults.push_back(metrics);
     

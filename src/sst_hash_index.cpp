@@ -414,6 +414,9 @@ void SSTHashIndex::build(
     }
 
     postingInput.close();
+    // Release all in-memory entries after writing posting lists.
+    std::vector<std::vector<Entry>>().swap(bucketEntries);
+
 
     // ---------------------------------------------------------
     // 6. Rewrite bucket directory with actual offsets.

@@ -1,0 +1,157 @@
+# RocksDB Installation Guide (Ubuntu 24.04)
+
+This guide describes how to install and build RocksDB 10.1.0 from source for the HierarchicalDB project.
+
+The library is compiled using Clang with RTTI enabled and as a static library.
+
+## 1. Install Dependencies
+
+```bash
+sudo apt update
+
+sudo apt install -y \
+    build-essential \
+    clang \
+    git \
+    cmake \
+    pkg-config \
+    libgflags-dev \
+    libsnappy-dev \
+    zlib1g-dev \
+    libbz2-dev \
+    liblz4-dev \
+    libzstd-dev
+```
+
+## 2. Download RocksDB 10.1.0
+
+Create the installation directory:
+
+```bash
+mkdir -p ~/rocksDB
+cd ~/rocksDB
+```
+
+Clone the RocksDB repository:
+
+```bash
+git clone --branch v10.1.0 --depth 1 \
+    https://github.com/facebook/rocksdb.git rocksdb
+```
+
+## 3. Build RocksDB with RTTI Enabled
+
+Navigate to the RocksDB source directory:
+
+```bash
+cd ~/rocksDB/rocksdb
+```
+
+Build the static library:
+
+```bash
+make -j"$(nproc)" static_lib \
+    CC=clang \
+    CXX=clang++ \
+    USE_RTTI=1 \
+    DEBUG_LEVEL=0 \
+    EXTRA_CXXFLAGS=-frtti
+```
+
+Build configuration:
+
+- Compiler: Clang / Clang++
+- C++ standard: RocksDB build default
+- Build type: Release
+- RTTI: Enabled
+- Library type: Static (`librocksdb.a`)
+- RocksDB version: 10.1.0
+
+## 4. Verify the Build
+
+Check that the static library exists:
+
+```bash
+ls -lh ~/rocksDB/rocksdb/librocksdb.a
+```
+
+Verify that RTTI information for `rocksdb::Customizable` is present:
+
+```bash
+nm -C ~/rocksDB/rocksdb/librocksdb.a \
+    | grep 'typeinfo for rocksdb::Customizable'
+```
+
+The output should contain a definition similar to:
+
+```text
+0000000000000000 V typeinfo for rocksdb::Customizable
+```
+
+The `V` symbol indicates a weak definition. Entries marked `U` are references to the symbol from other object files.
+
+## 5. Configure the HierarchicalDB Project
+
+In the project's Makefile, configure the RocksDB include and library paths:
+
+```makefile
+CXX = clang++
+
+CXXFLAGS = -std=c++20 \
+           -I/home/wmacyna/rocksDB/rocksdb/include \
+           -Iinclude -Ibloom -I/usr/include/spdlog
+
+LDFLAGS = -L/home/wmacyna/rocksDB/rocksdb \
+          -lz -lbz2 -lsnappy -llz4 -lzstd -pthread -ldl \
+          -fvisibility=hidden -fvisibility-inlines-hidden \
+          -lrocksdb -lfmt -lboost_system -lboost_thread -no-pie
+```
+
+**Important:** The include directory and library directory must refer to the same RocksDB installation.
+
+## 6. Build the HierarchicalDB Project
+
+Navigate to the project directory:
+
+```bash
+cd ~/Work/RockDB/bloom-journal/LSMColumnFamily
+```
+
+Remove previous object files and the old executable:
+
+```bash
+rm -rf obj
+rm -f HierarchicalDB
+```
+
+Build the project:
+
+```bash
+make -j"$(nproc)"
+```
+
+Do not use `make clean` if the `db` directory contains experimental databases, because the project's clean target also removes that directory.
+
+## 7. Verify the RocksDB Installation
+
+Check the library and header files:
+
+```bash
+ls -lh ~/rocksDB/rocksdb/librocksdb.a
+ls ~/rocksDB/rocksdb/include/rocksdb/db.h
+```
+
+The expected installation paths are:
+
+```text
+/home/wmacyna/rocksDB/rocksdb/include/
+/home/wmacyna/rocksDB/rocksdb/librocksdb.a
+```
+
+## Notes
+
+- RocksDB 10.1.0 is used for all experiments performed on the remote server.
+- RTTI must remain enabled (`USE_RTTI=1`).
+- The project uses the statically linked RocksDB library.
+- The system-wide RocksDB installation under `/usr/local` is not modified.
+- Do not delete the RocksDB source directory after building, because the project uses its headers and static library directly.

@@ -30,11 +30,11 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
 
 
   const std::vector<std::string> columns = {"phone", "mail", "address"};
-  const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 100'000'000, 300'000'000};
+  const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 100'000'000, 200'000'000};
   //const std::vector<int> dbSizes = {defaultNumRecords};
 
   // Run stundard queries            
-  const int numStandardQueries = 5;
+  const int numStandardQueries = 1;
 
   // Run comprehensive analysis across different real data percentages
   const int numQueriesPerScenario = 10;
@@ -47,7 +47,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     std::string dbName = (dbSize == defaultNumRecords)
                              ? sharedDbName
                              : baseDir + "/exp1_db_" + std::to_string(dbSize);
-    TestParams params = {dbName, dbSize, 3, 1, 100000, 4'000'000, 3};
+    TestParams params = {dbName, dbSize, 5, 1, 20000, 4'000'000, 3};
     spdlog::info("ExpBloomMetrics: Starting the experiment for the database: '{}'",
                  params.dbName);
     clearBloomFilterFiles(params.dbName);
@@ -160,17 +160,6 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     }
 
  
-    /*
-    // Then run pattern-based queries
-    // This pattern is useless. Only one value goes to the methods
-    spdlog::info("ExpBloomMetrics: Running pattern-based queries for {} columns", columns.size());
-    std::vector<PatternQueryResult> results = runPatternQueriesWithCsvData(
-        dbManager, hierarchies, columns, dbSize, config);
-    
-    spdlog::info("ExpBloomMetrics: Generated {} pattern results for {} columns", 
-                 results.size(), columns.size());
-*/
-   
     
     spdlog::info("ExpBloomMetrics: Running comprehensive analysis for {} columns with {} queries per scenario", 
                  columns.size(), numQueriesPerScenario);
@@ -191,9 +180,9 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
 
     writeCsvHeader("csv/exp_1_timing_comparison.csv",
                  "dbSize,realDataPercentage,cardinality,"
-                 "avgRealMultiTime,avgRealSingleTime,avgRealHashTime,"
-                 "avgFalseMultiTime,avgFalseSingleTime,avgFalseHashTime,"
-                 "avgHierarchicalMultiTime,avgHierarchicalSingleTime, avgHashIndexTime,");
+                 "avgRealMultiTime,avgRealSingleTime,avgRealHashTime,avgRealHashSingleTime,avgRealHashSingleHierarchyTime,"
+                 "avgFalseMultiTime,avgFalseSingleTime,avgFalseHashTime, avgFalseHashSingleTime, avgFalseHashSingleHierarchyTime,"
+                 "avgHierarchicalMultiTime,avgHierarchicalSingleTime, avgHashIndexTime, avgHashSingleIndexTime, avgHashSingleHierarchyIndexTime,");
     std::ofstream timing_comparison("csv/exp_1_timing_comparison.csv", std::ios::app);
 
     writeCsvHeader("csv/exp_1_comprehensive_checks.csv",
@@ -233,9 +222,12 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
       // Timing comparison (8 columns)
       if (timing_comparison) {
         timing_comparison << dbSize << "," << result.realDataPercentage << "," << config.cardinality << "," 
-                         << result.avgRealDataMultiTime << "," << result.avgRealDataSingleTime << "," << result.avgRealHashIndexTime << ","
-                         << result.avgFalseDataMultiTime << "," << result.avgFalseDataSingleTime << "," << result.avgFalseHashIndexTime << ","
-                         << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "," << result.avgHashIndexTime << "\n";
+                         << result.avgRealDataMultiTime << "," << result.avgRealDataSingleTime << "," << result.avgRealHashIndexTime 
+                         << "," << result.avgRealHashSingleIndexTime << "," << result.avgRealHashSingleHierarchyIndexTime << ","
+                         << result.avgFalseDataMultiTime << "," << result.avgFalseDataSingleTime << "," << result.avgFalseHashIndexTime << "," 
+                         << result.avgFalseHashSingleIndexTime << "," << result.avgFalseHashSingleHierachyIndexTime << ","
+                         << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "," << result.avgHashIndexTime << "," 
+                         << result.avgHashSingleIndexTime << "," << result.avgHashSingleHierarchyIndexTime << "\n";
       }
 
 

@@ -1,11 +1,41 @@
 # Variables
+# CXX = clang++
+
+
+# CXXFLAGS = -std=c++20  -I/usr/local/include/rocksdb -Iinclude -Ibloom -I/usr/include/spdlog
+# LDFLAGS = -L/usr/local/lib  -lz -lbz2 -lsnappy -llz4 -lzstd -pthread -ldl -fvisibility=hidden -fvisibility-inlines-hidden -lrocksdb -lfmt -lboost_system -lboost_thread -no-pie
+
+# ----------Local
+#rm -rf obj
+#rm -f HierarchicalDB
+
+#make -j"$(nproc)" \
+ #   ROCKSDB_DIR=/usr \
+ #   ROCKSDB_LIB_DIR=/usr/lib/x86_64-linux-gnu
+
+# ------------ Remote
+#rm -rf obj
+#rm -f HierarchicalDB
+
+##make -j"$(nproc)" \
+ #   ROCKSDB_DIR=/home/wmacyna/rocksDB/rocksdb2 \
+ #   ROCKSDB_LIB_DIR=/home/wmacyna/rocksDB/rocksdb2
+
+
+
 CXX = clang++
 
+ROCKSDB_DIR ?= /usr
+ROCKSDB_LIB_DIR ?= $(ROCKSDB_DIR)/lib
 
-CXXFLAGS = -std=c++20  -I/usr/local/include/rocksdb -Iinclude -Ibloom -I/usr/include/spdlog
-LDFLAGS = -L/usr/local/lib  -lz -lbz2 -lsnappy -llz4 -lzstd -pthread -ldl -fvisibility=hidden -fvisibility-inlines-hidden -lrocksdb -lfmt -lboost_system -lboost_thread -no-pie
+CXXFLAGS = -std=c++20 \
+           -I$(ROCKSDB_DIR)/include \
+           -Iinclude -Ibloom -I/usr/include/spdlog
 
-
+LDFLAGS = -L$(ROCKSDB_LIB_DIR) \
+          -lz -lbz2 -lsnappy -llz4 -lzstd -pthread -ldl \
+          -fvisibility=hidden -fvisibility-inlines-hidden \
+          -lrocksdb -lfmt -lboost_system -lboost_thread -no-pie
 
 TARGET = HierarchicalDB
 SRC = \
