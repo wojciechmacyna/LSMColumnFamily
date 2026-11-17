@@ -241,6 +241,11 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
     const std::vector<std::string>& columns, size_t dbSize, int numQueriesPerScenario, const DistributionConfig& config = {},
     const std::map<std::string, std::vector<std::string>>* columnSstFiles = nullptr);
 
+    
+void initialDB(DBManager& dbManager, BloomManager& bloomManager,   const std::vector<std::string>& columns, 
+  TestParams params, std::map<std::string, BloomTree>& hierarchies,  
+  std::map<std::string, std::vector<std::string>> &columnSstFiles, const DistributionConfig config);
+
 void writeCsvHeader(const std::string& filename, const std::string& headerLine);
 
 double getProbabilityOfFalsePositive(size_t bloomSize, int numHashFunctions,

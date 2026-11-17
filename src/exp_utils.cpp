@@ -11,6 +11,7 @@
 #include <sstream>
 #include <thread>
 #include <filesystem>
+#include <regex>
 
 #include "algorithm.hpp"
 #include "bloom_tree.hpp"
@@ -18,12 +19,122 @@
 #include "db_manager.hpp"
 #include "stopwatch.hpp"
 #include "sst_hash_index.hpp"
+#include "stopwatch.hpp"
 
 extern boost::asio::thread_pool globalThreadPool;
 extern std::atomic<size_t> gBloomCheckCount;
 extern std::atomic<size_t> gLeafBloomCheckCount;
 extern std::atomic<size_t> gSSTCheckCount;
 
+void clearBloomFilterFiles(const std::string& dbDir) {
+  std::regex bloomFilePattern(R"(^\d+\.sst_[^_]+_[^_]+$)");
+  std::error_code ec;
+
+  for (auto const& entry : std::filesystem::directory_iterator(dbDir, ec)) {
+    if (ec) {
+      spdlog::error("Failed to iterate '{}': {}", dbDir, ec.message());
+      return;
+    }
+
+    auto const& path = entry.path();
+    auto filename = path.filename().string();
+
+    if (entry.is_regular_file() &&
+        std::regex_match(filename, bloomFilePattern)) {
+      if (std::filesystem::remove(path, ec)) {
+      } else {
+        spdlog::error("Could not remove '{}': {}", path.string(), ec.message());
+      }
+    }
+  }
+}
+
+
+void initialDB(DBManager& dbManager, BloomManager& bloomManager,   const std::vector<std::string>& columns, 
+  TestParams params, std::map<std::string, BloomTree>& hierarchies,  
+  std::map<std::string, std::vector<std::string>> &columnSstFiles, const DistributionConfig config){
+
+   spdlog::info("ExpBloomMetrics: Starting the experiment for the database: '{}'",
+                 params.dbName);
+    clearBloomFilterFiles(params.dbName);
+
+    StopWatch stopwatch;
+
+    stopwatch.start();
+    if (std::filesystem::exists(params.dbName)) {
+      spdlog::info(
+          "EXP1: Database '{}' already exists, skipping initialization.",
+          params.dbName);
+      dbManager.openDB(params.dbName, columns);
+    } else {
+      dbManager.openDB(params.dbName, columns);
+      dbManager.insertRecords(params.numRecords, columns, config);
+      try {
+        dbManager.compactAllColumnFamilies(params.numRecords);
+      } catch (const std::exception& e) {
+        spdlog::error("Error '{}'", e.what());
+        exit(1);
+      }
+    }
+    stopwatch.stop();
+    auto dbCreationTime = stopwatch.elapsedMicros();
+
+    stopwatch.start();
+    columnSstFiles =
+        scanSstFilesAsync(columns, dbManager, params);
+    
+    hierarchies = buildHierarchies(columnSstFiles, bloomManager, params);
+    stopwatch.stop();
+    auto bloomCreationTime = stopwatch.elapsedMicros();
+
+    stopwatch.start();
+    uint64_t hashIndexSize = buildHashIndexesAsync(columnSstFiles);
+    stopwatch.stop();
+    auto hashIndexCreationTime = stopwatch.elapsedMicros();
+
+    size_t totalDiskBloomSize = 0;
+    size_t totalMemoryBloomSize = 0;
+    for (const auto& kv : hierarchies) {
+      const BloomTree& tree = kv.second;
+      totalDiskBloomSize += tree.diskSize();
+      totalMemoryBloomSize += tree.memorySize();
+    }
+
+    writeCsvHeader(
+      "csv/exp_1_bloom_metrics.csv",
+      "numRecords,bloomTreeRatio,itemsPerPartition,bloomSize,numHashFunctions,"
+      "singleHierarchyLeafs,bloomDiskSize,blomMemSize, hashIndexSize");
+
+    std::ofstream out("csv/exp_1_bloom_metrics.csv", std::ios::app);
+    if (!out) {
+      spdlog::error(
+          "ExpBloomMetrics: Nie udało się otworzyć pliku wynikowego!");
+      return;
+    }
+    out << params.numRecords << "," << params.bloomTreeRatio << ","
+        << params.itemsPerPartition << "," << params.bloomSize << ","
+        << params.numHashFunctions << ","
+        << hierarchies.at(columns[0]).leafNodes.size() << ","
+        << totalDiskBloomSize << "," << totalMemoryBloomSize << "," << hashIndexSize <<  "\n";
+    out.close();
+    spdlog::info("ExpBloomMetrics: Experiment for database '{}' finished.",
+                 params.dbName);
+
+
+    /// Creation time metrics csv/exp_3_creation_time.csv
+     writeCsvHeader("csv/exp_1_creation_time.csv",
+                 "numRecords,dbCreationTime, bloomCreationTime, hashIndexCreationTime");
+
+    std::ofstream outExp3("csv/exp_1_creation_time.csv", std::ios::app);
+    if (!outExp3) {
+      spdlog::error(
+          "ExpBloomMetrics: Nie udało się otworzyć pliku wynikowego!");
+      return;
+    }
+    outExp3 << params.numRecords << "," << dbCreationTime << ","
+            << bloomCreationTime << "," << hashIndexCreationTime << "\n";
+    outExp3.close();
+}
 
 uint64_t buildHashIndexesAsync(
     const std::map<std::string, std::vector<std::string>>& columnSstFiles) {
@@ -1154,11 +1265,24 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
   
     stopwatch.start();
 
+    HashHierarchyTimings timings;
+
   auto resultsDataSingleHashHierarchy =
-    dbManager.findUsingSingleHierarchyAndHashIndexes(queryTrees[0], columns, currentExpectedValues);
+    dbManager.findUsingSingleHierarchyAndHashIndexes(queryTrees[0], columns, currentExpectedValues, &timings);
     stopwatch.stop();
     result.hashSingleHierarchyIndexTime = stopwatch.elapsedMicros();
   
+    spdlog::info(
+    "HashSingleHierarchy: Bloom={} us, Open={} us, "
+    "Lookup={} us, FilterVerify={} us, Total={} us",
+    timings.bloomTime,
+    timings.openTime,
+    timings.lookupTime,
+    timings.filterVerifyTime,
+    timings.bloomTime +
+    timings.openTime +
+    timings.lookupTime +
+    timings.filterVerifyTime);
 
     // --- Hierarchical Multi-Column Query ---
     gBloomCheckCount = 0;

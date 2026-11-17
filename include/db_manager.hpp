@@ -42,6 +42,13 @@ struct DistributionConfig {
     uint64_t seed = 12345;
 };
 
+struct HashHierarchyTimings {
+    uint64_t bloomTime = 0;
+    uint64_t openTime = 0;
+    uint64_t lookupTime = 0;
+    uint64_t filterVerifyTime = 0;
+};
+
 class DBManager {
  public:
   void compactAllColumnFamilies(size_t numRecords = 0);
@@ -71,7 +78,8 @@ std::vector<std::string> getChangedSSTFilesForColumn(
 std::vector<std::string> findUsingSingleHierarchyAndHashIndexes(
     BloomTree& hierarchy,
     const std::vector<std::string>& columns,
-    const std::vector<std::string>& values);
+    const std::vector<std::string>& values,
+    HashHierarchyTimings* timings = nullptr);
 
 std::vector<std::string> findUsingHashIndexesSingleColumn(
     const std::vector<std::string>& columns,

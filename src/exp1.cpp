@@ -20,6 +20,7 @@
 #include "db_manager.hpp"
 #include "exp_utils.hpp"
 #include "stopwatch.hpp"
+#include "exp_utils.hpp"
 
 extern void clearBloomFilterFiles(const std::string& dbDir);
 extern boost::asio::thread_pool globalThreadPool;
@@ -30,8 +31,15 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
 
 
   const std::vector<std::string> columns = {"phone", "mail", "address"};
-  const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 100'000'000, 200'000'000};
-  //const std::vector<int> dbSizes = {defaultNumRecords};
+  //const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 100'000'000, 200'000'000};
+  const std::vector<int> dbSizes = {5'000'000};
+
+
+  for (const auto& dbSize : dbSizes) {
+    std::string dbName = (dbSize == defaultNumRecords)
+                             ? sharedDbName
+                             : baseDir + "/exp1_db_" + std::to_string(dbSize);
+    TestParams params = {dbName, dbSize, 5, 1, 20000, 4'000'000, 3};
 
   // Run stundard queries            
   const int numStandardQueries = 1;
@@ -39,15 +47,14 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
   // Run comprehensive analysis across different real data percentages
   const int numQueriesPerScenario = 10;
 
-  DBManager dbManager;
-  BloomManager bloomManager;
-  StopWatch stopwatch;
-
-  for (const auto& dbSize : dbSizes) {
-    std::string dbName = (dbSize == defaultNumRecords)
-                             ? sharedDbName
-                             : baseDir + "/exp1_db_" + std::to_string(dbSize);
-    TestParams params = {dbName, dbSize, 5, 1, 20000, 4'000'000, 3};
+    DBManager dbManager;
+    BloomManager bloomManager;
+    std::map<std::string, BloomTree> hierarchies;
+    std::map<std::string, std::vector<std::string>> columnSstFiles;
+    
+    initialDB(dbManager, bloomManager,  columns, params, hierarchies, columnSstFiles, config);
+    
+    /*
     spdlog::info("ExpBloomMetrics: Starting the experiment for the database: '{}'",
                  params.dbName);
     clearBloomFilterFiles(params.dbName);
@@ -126,6 +133,8 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
     outExp3 << params.numRecords << "," << dbCreationTime << ","
             << bloomCreationTime << "," << hashIndexCreationTime << "\n";
     outExp3.close();
+    */
+
 
     // Run standard queries first
     AggregatedQueryTimings timings = runStandardQueries(

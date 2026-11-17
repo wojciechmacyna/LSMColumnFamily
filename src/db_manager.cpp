@@ -38,7 +38,8 @@ std::vector<std::string>
 DBManager::findUsingSingleHierarchyAndHashIndexes(
     BloomTree& hierarchy,
     const std::vector<std::string>& columns,
-    const std::vector<std::string>& values)
+    const std::vector<std::string>& values,
+    HashHierarchyTimings* timings)
 {
     if (columns.size() != values.size() || columns.empty()) {
         throw std::runtime_error(
@@ -56,6 +57,9 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
     // 1. Wyszukanie kandydatów w BloomTree
     // --------------------------------------------------
 
+    HashHierarchyTimings localTimings;
+
+  
     StopWatch bloomWatch;
     bloomWatch.start();
 
@@ -90,6 +94,7 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
 
     bloomWatch.stop();
     bloomTime = bloomWatch.elapsedMicros();
+    localTimings.bloomTime = bloomTime;
 
     // --------------------------------------------------
     // 3. Wyszukiwanie w Hash Indexach wybranych SST
@@ -102,6 +107,7 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
     uint64_t hashReturnedKeys = 0;
 
     StopWatch hashWatch;
+    StopWatch sw;
     hashWatch.start();
 
     for (const auto& [filename, ranges] : sstRanges) {
@@ -110,6 +116,9 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
             filename + "." + columns[0] + ".hidx";
 
         SSTHashIndex hashIndex;
+
+            // T2: otwieranie indeksu
+        sw.start();
 
         if (!hashIndex.open(indexPath)) {
             ++failedIndexes;
@@ -120,10 +129,15 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
 
             continue;
         }
+        sw.stop();
+        localTimings.openTime += sw.elapsedMicros();
 
         ++openedIndexes;
 
         std::vector<std::string> keys;
+
+        // T3: wyszukiwanie wartości
+        sw.start();
 
         if (!hashIndex.lookup(values[0], keys)) {
             spdlog::warn(
@@ -132,6 +146,9 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
 
             continue;
         }
+
+        sw.stop();
+        localTimings.lookupTime += sw.elapsedMicros();
 
         hashReturnedKeys += keys.size();
 
@@ -162,6 +179,8 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
     // --------------------------------------------------
     // 4. Usuwanie duplikatów
     // --------------------------------------------------
+
+    sw.start();
 
     std::sort(allKeys.begin(), allKeys.end());
 
@@ -212,6 +231,9 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
         }
     }
 
+    sw.stop();
+    localTimings.filterVerifyTime = sw.elapsedMicros();
+
     verificationWatch.stop();
     verificationTime = verificationWatch.elapsedMicros();
 
@@ -240,6 +262,10 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
         hashTime,
         verificationTime,
         totalWatch.elapsedMicros());
+
+        if (timings != nullptr) {
+          *timings = localTimings;
+        }
 
     return matchingKeys;
 }

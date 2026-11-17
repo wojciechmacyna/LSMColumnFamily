@@ -25,7 +25,7 @@
 
 boost::asio::thread_pool globalThreadPool{std::thread::hardware_concurrency()};
 
-void clearBloomFilterFiles(const std::string& dbDir) {
+/*void clearBloomFilterFiles(const std::string& dbDir) {
   std::regex bloomFilePattern(R"(^\d+\.sst_[^_]+_[^_]+$)");
   std::error_code ec;
 
@@ -47,6 +47,7 @@ void clearBloomFilterFiles(const std::string& dbDir) {
     }
   }
 }
+*/
 
 // ##### Main function ####
 int main(int argc, char* argv[]) {
@@ -74,12 +75,12 @@ int main(int argc, char* argv[]) {
 
   try {
     // run section- test
-    runExp1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    //runExp1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     //runExp5(sharedDbName, defaultNumRecords, skipDbScan);
     //runExp6(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp7(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp8(baseDir, initMode, skipDbScan);
-    //runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     // runExpJ2(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
   } catch (const std::exception& e) {
     spdlog::error("[Error] {}", e.what());
