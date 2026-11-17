@@ -19,8 +19,8 @@ void runExpJ1(std::string baseDir, bool initMode, std::string sharedDbName,
 
         const std::vector<std::string> columns = {"phone", "mail", "address"};
 
-        const std::vector<double> capacityPercentages = {1.0};
-        //     const std::vector<double> capacityPercentages = {0.01, 0.1, 1.0};
+        // const std::vector<double> capacityPercentages = {1.0};
+             const std::vector<double> capacityPercentages = {0.01, 0.1, 1.0};
         int dbSize = defaultNumRecords;        
 
         for (const double percentage : capacityPercentages)
