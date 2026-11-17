@@ -46,7 +46,10 @@ struct HashHierarchyTimings {
     uint64_t bloomTime = 0;
     uint64_t openTime = 0;
     uint64_t lookupTime = 0;
-    uint64_t filterVerifyTime = 0;
+    uint64_t rangeFilterTime = 0;
+    uint64_t sortUniqueTime = 0;
+    uint64_t rocksDBVerifyTime = 0;
+    uint64_t totalTime = 0;
 };
 
 class DBManager {

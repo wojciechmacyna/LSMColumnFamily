@@ -1272,17 +1272,18 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     stopwatch.stop();
     result.hashSingleHierarchyIndexTime = stopwatch.elapsedMicros();
   
-    spdlog::info(
+  spdlog::info(
     "HashSingleHierarchy: Bloom={} us, Open={} us, "
-    "Lookup={} us, FilterVerify={} us, Total={} us",
+    "Lookup={} us, RangeFilter={} us, SortUnique={} us, "
+    "RocksDBVerify={} us, Total={} us",
     timings.bloomTime,
     timings.openTime,
     timings.lookupTime,
-    timings.filterVerifyTime,
-    timings.bloomTime +
-    timings.openTime +
-    timings.lookupTime +
-    timings.filterVerifyTime);
+    timings.rangeFilterTime,
+    timings.sortUniqueTime,
+    timings.rocksDBVerifyTime,
+    timings.totalTime);
+
 
     // --- Hierarchical Multi-Column Query ---
     gBloomCheckCount = 0;

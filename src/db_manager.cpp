@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <chrono>
 
 #include "algorithm.hpp"
 #include "stopwatch.hpp"
@@ -32,6 +33,7 @@
 
 
 extern boost::asio::thread_pool globalThreadPool;
+
 
 
 std::vector<std::string>
@@ -46,35 +48,48 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
             "Number of columns and values must be equal and non-empty.");
     }
 
+    using Clock = std::chrono::steady_clock;
+
+    const auto elapsedMicros = [](const auto& start, const auto& end) {
+        return static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                end - start).count());
+    };
+
     StopWatch totalWatch;
     totalWatch.start();
 
-    uint64_t bloomTime = 0;
-    uint64_t hashTime = 0;
-    uint64_t verificationTime = 0;
+    HashHierarchyTimings localTimings{};
 
     // --------------------------------------------------
     // 1. Wyszukanie kandydatów w BloomTree
     // --------------------------------------------------
 
-    HashHierarchyTimings localTimings;
-
-  
-    StopWatch bloomWatch;
-    bloomWatch.start();
+    auto bloomStart = Clock::now();
 
     std::vector<const Node*> candidates =
         hierarchy.queryNodes(values[0], "", "");
 
     if (candidates.empty()) {
-        bloomWatch.stop();
+
+        auto bloomEnd = Clock::now();
+
+        localTimings.bloomTime =
+            elapsedMicros(bloomStart, bloomEnd);
+
         totalWatch.stop();
 
+        localTimings.totalTime = totalWatch.elapsedMicros();
+
+        if (timings != nullptr) {
+            *timings = localTimings;
+        }
+
         spdlog::info(
-            "BloomSingle + Hash: no candidates. "
-            "Bloom: {} us, total: {} us",
-            bloomWatch.elapsedMicros(),
-            totalWatch.elapsedMicros());
+            "HashSingleHierarchy: no candidates. "
+            "Bloom: {} us, Total: {} us",
+            localTimings.bloomTime,
+            localTimings.totalTime);
 
         return {};
     }
@@ -92,12 +107,13 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
         });
     }
 
-    bloomWatch.stop();
-    bloomTime = bloomWatch.elapsedMicros();
-    localTimings.bloomTime = bloomTime;
+    auto bloomEnd = Clock::now();
+
+    localTimings.bloomTime =
+        elapsedMicros(bloomStart, bloomEnd);
 
     // --------------------------------------------------
-    // 3. Wyszukiwanie w Hash Indexach wybranych SST
+    // 3. Otwieranie Hash Indexów i wyszukiwanie wartości
     // --------------------------------------------------
 
     std::vector<std::string> allKeys;
@@ -106,10 +122,6 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
     uint64_t failedIndexes = 0;
     uint64_t hashReturnedKeys = 0;
 
-    StopWatch hashWatch;
-    StopWatch sw;
-    hashWatch.start();
-
     for (const auto& [filename, ranges] : sstRanges) {
 
         const std::string indexPath =
@@ -117,10 +129,17 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
 
         SSTHashIndex hashIndex;
 
-            // T2: otwieranie indeksu
-        sw.start();
+        // T2: otwieranie indeksu
+
+        auto openStart = Clock::now();
 
         if (!hashIndex.open(indexPath)) {
+
+            auto openEnd = Clock::now();
+
+            localTimings.openTime +=
+                elapsedMicros(openStart, openEnd);
+
             ++failedIndexes;
 
             spdlog::warn(
@@ -129,17 +148,30 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
 
             continue;
         }
-        sw.stop();
-        localTimings.openTime += sw.elapsedMicros();
+
+        auto openEnd = Clock::now();
+
+        localTimings.openTime +=
+            elapsedMicros(openStart, openEnd);
 
         ++openedIndexes;
 
         std::vector<std::string> keys;
 
         // T3: wyszukiwanie wartości
-        sw.start();
 
-        if (!hashIndex.lookup(values[0], keys)) {
+        auto lookupStart = Clock::now();
+
+        bool lookupSuccess =
+            hashIndex.lookup(values[0], keys);
+
+        auto lookupEnd = Clock::now();
+
+        localTimings.lookupTime +=
+            elapsedMicros(lookupStart, lookupEnd);
+
+        if (!lookupSuccess) {
+
             spdlog::warn(
                 "Hash Index lookup failed: {}",
                 indexPath);
@@ -147,40 +179,73 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
             continue;
         }
 
-        sw.stop();
-        localTimings.lookupTime += sw.elapsedMicros();
-
         hashReturnedKeys += keys.size();
 
-        // Zachowanie zakresów wybranych przez BloomTree.
-        for (const auto& key : keys) {
+        // --------------------------------------------------
+        // 4. T4: Range filtering
+        // --------------------------------------------------
 
-            bool inRange = false;
+        auto rangeStart = Clock::now();
 
-            for (const auto& range : ranges) {
+        // Sortowanie zakresów według startKey.
+        std::vector<SSTRange> sortedRanges = ranges;
 
-                if (key >= range.startKey &&
-                    key <= range.endKey) {
+        std::sort(
+            sortedRanges.begin(),
+            sortedRanges.end(),
+            [](const SSTRange& a, const SSTRange& b) {
+                return a.startKey < b.startKey;
+            });
 
-                    inRange = true;
-                    break;
-                }
+        // Scalanie nakładających się zakresów.
+        std::vector<SSTRange> normalizedRanges;
+        normalizedRanges.reserve(sortedRanges.size());
+
+        for (const auto& range : sortedRanges) {
+
+            if (normalizedRanges.empty() ||
+                range.startKey > normalizedRanges.back().endKey) {
+
+                normalizedRanges.push_back(range);
             }
+            else if (range.endKey > normalizedRanges.back().endKey) {
 
-            if (inRange) {
-                allKeys.push_back(key);
+                normalizedRanges.back().endKey = range.endKey;
             }
         }
+
+        // Wyszukiwanie binarne zakresu dla każdego klucza.
+        for (const auto& key : keys) {
+
+            auto it = std::upper_bound(
+                normalizedRanges.begin(),
+                normalizedRanges.end(),
+                key,
+                [](const std::string& value, const SSTRange& range) {
+                    return value < range.startKey;
+                });
+
+            if (it != normalizedRanges.begin()) {
+
+                --it;
+
+                if (key <= it->endKey) {
+                    allKeys.push_back(key);
+                }
+            }
+        }
+
+        auto rangeEnd = Clock::now();
+
+        localTimings.rangeFilterTime +=
+            elapsedMicros(rangeStart, rangeEnd);
     }
 
-    hashWatch.stop();
-    hashTime = hashWatch.elapsedMicros();
-
     // --------------------------------------------------
-    // 4. Usuwanie duplikatów
+    // 5. Sort + unique
     // --------------------------------------------------
 
-    sw.start();
+    auto sortStart = Clock::now();
 
     std::sort(allKeys.begin(), allKeys.end());
 
@@ -188,12 +253,38 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
         std::unique(allKeys.begin(), allKeys.end()),
         allKeys.end());
 
+    auto sortEnd = Clock::now();
+
+    localTimings.sortUniqueTime =
+        elapsedMicros(sortStart, sortEnd);
+
     // --------------------------------------------------
-    // 5. Weryfikacja kluczy we wszystkich kolumnach
+    // 6. Przygotowanie Column Family handles
     // --------------------------------------------------
 
-    StopWatch verificationWatch;
-    verificationWatch.start();
+    std::vector<rocksdb::ColumnFamilyHandle*> cfHandles;
+    cfHandles.reserve(columns.size());
+
+    for (const auto& column : columns) {
+
+        auto cfIt = cf_handles_.find(column);
+
+        if (cfIt == cf_handles_.end()) {
+            throw std::runtime_error(
+                "Column Family not found: " + column);
+        }
+
+        cfHandles.push_back(cfIt->second.get());
+    }
+
+    rocksdb::ReadOptions readOptions;
+    readOptions.fill_cache = false;
+
+    // --------------------------------------------------
+    // 7. Weryfikacja kluczy we wszystkich kolumnach
+    // --------------------------------------------------
+
+    auto verifyStart = Clock::now();
 
     std::vector<std::string> matchingKeys;
 
@@ -203,20 +294,11 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
 
         for (size_t i = 0; i < columns.size(); ++i) {
 
-            auto cfIt = cf_handles_.find(columns[i]);
-
-            if (cfIt == cf_handles_.end()) {
-                throw std::runtime_error(
-                    "Column Family not found: " + columns[i]);
-            }
-
             std::string dbValue;
-
-            rocksdb::ReadOptions readOptions;
 
             auto status = db_->Get(
                 readOptions,
-                cfIt->second.get(),
+                cfHandles[i],
                 key,
                 &dbValue);
 
@@ -231,26 +313,32 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
         }
     }
 
-    sw.stop();
-    localTimings.filterVerifyTime = sw.elapsedMicros();
+    auto verifyEnd = Clock::now();
 
-    verificationWatch.stop();
-    verificationTime = verificationWatch.elapsedMicros();
+    localTimings.rocksDBVerifyTime =
+        elapsedMicros(verifyStart, verifyEnd);
 
     // --------------------------------------------------
-    // 6. Podsumowanie
+    // 8. Podsumowanie
     // --------------------------------------------------
 
     totalWatch.stop();
 
+    localTimings.totalTime = totalWatch.elapsedMicros();
+
+    if (timings != nullptr) {
+        *timings = localTimings;
+    }
+
     spdlog::info(
-        "BloomSingle + Hash completed. "
+        "HashSingleHierarchy completed. "
         "Bloom candidates: {}, SST files: {}, "
         "Opened indexes: {}, Failed indexes: {}, "
         "Hash returned keys: {}, Unique keys: {}, "
         "Matching keys: {}, "
-        "Bloom: {} us, Hash: {} us, "
-        "Verification: {} us, Total: {} us",
+        "Bloom: {} us, Open: {} us, Lookup: {} us, "
+        "RangeFilter: {} us, SortUnique: {} us, "
+        "RocksDBVerify: {} us, Total: {} us",
         candidates.size(),
         sstRanges.size(),
         openedIndexes,
@@ -258,17 +346,17 @@ DBManager::findUsingSingleHierarchyAndHashIndexes(
         hashReturnedKeys,
         allKeys.size(),
         matchingKeys.size(),
-        bloomTime,
-        hashTime,
-        verificationTime,
-        totalWatch.elapsedMicros());
-
-        if (timings != nullptr) {
-          *timings = localTimings;
-        }
+        localTimings.bloomTime,
+        localTimings.openTime,
+        localTimings.lookupTime,
+        localTimings.rangeFilterTime,
+        localTimings.sortUniqueTime,
+        localTimings.rocksDBVerifyTime,
+        localTimings.totalTime);
 
     return matchingKeys;
 }
+
 
 
 std::vector<std::string> DBManager::findUsingHashIndexesSingleColumn(
