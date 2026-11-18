@@ -796,29 +796,59 @@ const char* distributionName =
       "Inserting {} records across {} CFs using {} distribution...",
       numRecords, columns.size(), distributionName);
 
-  // Initialize Zipfian generator only when needed.
-  const double zipfExponent = config.exponent;
-  const size_t maxZipfCardinality = config.cardinality;
+  // Initialize Zipfian / Mixed generator only when needed.
+const double zipfExponent = config.exponent;
+const double zipfRatio = std::clamp(config.zipfRatio, 0.0, 1.0);
+const size_t maxZipfCardinality = config.cardinality;
 
-  std::mt19937_64 rng(12345);
-  std::vector<double> weights;
-  std::discrete_distribution<size_t> zipfDist;
+std::mt19937_64 rng(config.seed);
+std::vector<double> weights;
+std::discrete_distribution<size_t> zipfDist;
 
-  if (config.type == DataDistribution::Zipfian && numRecords > 0) {
+if ((config.type == DataDistribution::Zipfian ||
+     config.type == DataDistribution::Mixed) &&
+    numRecords > 0) {
+
     const size_t cardinality = std::min(
         static_cast<size_t>(numRecords),
         maxZipfCardinality);
 
-    weights.reserve(cardinality);
+    if (cardinality > 0) {
+        weights.reserve(cardinality);
 
-    for (size_t rank = 1; rank <= cardinality; ++rank) {
-      weights.push_back(
-          1.0 / std::pow(static_cast<double>(rank), zipfExponent));
+        double zipfWeightSum = 0.0;
+
+        // Calculate Zipf weights.
+        for (size_t rank = 1; rank <= cardinality; ++rank) {
+            const double weight =
+                1.0 / std::pow(
+                    static_cast<double>(rank),
+                    zipfExponent);
+
+            weights.push_back(weight);
+            zipfWeightSum += weight;
+        }
+
+        // Normalize Zipf weights and combine with Uniform.
+        if (config.type == DataDistribution::Mixed) {
+
+            for (size_t i = 0; i < cardinality; ++i) {
+                const double uniformProbability =
+                    1.0 / static_cast<double>(cardinality);
+
+                const double zipfProbability =
+                    weights[i] / zipfWeightSum;
+
+                weights[i] =
+                    (1.0 - zipfRatio) * uniformProbability +
+                    zipfRatio * zipfProbability;
+            }
+        }
+
+        zipfDist = std::discrete_distribution<size_t>(
+            weights.begin(), weights.end());
     }
-
-    zipfDist = std::discrete_distribution<size_t>(
-        weights.begin(), weights.end());
-  }
+}
 
   rocksdb::WriteBatch batch;
 
@@ -833,15 +863,17 @@ const char* distributionName =
     for (const auto& column : columns) {
       std::string value;
 
-      if (config.type == DataDistribution::Zipfian) {
+      if (config.type == DataDistribution::Zipfian ||
+        config.type == DataDistribution::Mixed) {
+
         // Rank 1 is the most frequent value.
         const size_t rank = zipfDist(rng) + 1;
 
         value = column + "_value" + std::to_string(rank);
-      } else {
+    } else {
         // Original behavior: every record has a distinct value.
         value = column + "_value" + index;
-      }
+    }
 
       auto handle = cf_handles_.at(column).get();
       batch.Put(handle, key, value);

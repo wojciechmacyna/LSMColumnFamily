@@ -1154,30 +1154,71 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     isRealDataQuery[i] = true;
   }
 
-  // Shuffle
-  std::random_device rd;
-  std::mt19937 generator(rd());
-  std::shuffle(isRealDataQuery.begin(), isRealDataQuery.end(), generator);
 
 
-  // Previous implementation
-  ///std::uniform_int_distribution<size_t> distribution(1, dbSize);
 
-// New implementation: Normal distribution takes from all values in db
-  // Ziphian only from the inserted values (values in Ziphian can be repeated.)
-  
-  size_t cardinality=0;
-  if (config.type == DataDistribution::Normal) {
-    cardinality=dbSize;
-  }
-  else {
-    cardinality =
-      std::max<size_t>(1, std::min(config.cardinality, dbSize));
-  }
+  // Shuffle real/false query pattern deterministically.
+std::mt19937_64 shuffleRng(config.seed);
+std::shuffle(
+    isRealDataQuery.begin(),
+    isRealDataQuery.end(),
+    shuffleRng);
 
+// Determine cardinality.
+size_t cardinality = 0;
 
-  auto zipfDist = zipfDistribution(config.exponent, cardinality, dbSize);
-  std::uniform_int_distribution<size_t> distribution(1, cardinality);
+if (config.type == DataDistribution::Normal) {
+    cardinality = dbSize;
+} else {
+    cardinality = std::max<size_t>(
+        1, std::min(config.cardinality, dbSize));
+}
+
+// Initialize query generators.
+std::mt19937_64 queryRng(config.seed + 1);
+
+std::discrete_distribution<size_t> zipfDist;
+std::uniform_int_distribution<size_t> uniformDist(
+    1, cardinality);
+
+if (config.type == DataDistribution::Zipfian ||
+    config.type == DataDistribution::Mixed) {
+
+    std::vector<double> weights;
+    weights.reserve(cardinality);
+
+    double zipfWeightSum = 0.0;
+
+    for (size_t rank = 1; rank <= cardinality; ++rank) {
+        const double weight =
+            1.0 / std::pow(
+                static_cast<double>(rank),
+                config.exponent);
+
+        weights.push_back(weight);
+        zipfWeightSum += weight;
+    }
+
+    if (config.type == DataDistribution::Mixed) {
+        const double zipfRatio =
+            std::clamp(config.zipfRatio, 0.0, 1.0);
+
+        for (size_t i = 0; i < cardinality; ++i) {
+            const double uniformProbability =
+                1.0 / static_cast<double>(cardinality);
+
+            const double zipfProbability =
+                weights[i] / zipfWeightSum;
+
+            weights[i] =
+                (1.0 - zipfRatio) * uniformProbability +
+                zipfRatio * zipfProbability;
+        }
+    }
+
+    zipfDist = std::discrete_distribution<size_t>(
+        weights.begin(), weights.end());
+}
 
 
   StopWatch stopwatch;
@@ -1200,14 +1241,13 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
       pattern = patterns[patternIndex];
     }
     
-    //size_t randomId = distribution(generator);
 
     size_t randomId;
 
     if (config.type == DataDistribution::Normal) {
-      randomId = distribution(generator);
+        randomId = uniformDist(queryRng);
     } else {
-      randomId = zipfDist(generator) + 1;
+        randomId = zipfDist(queryRng) + 1;
     }
 
     std::string existingValueSuffix = "_value" + std::to_string(randomId);

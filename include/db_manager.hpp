@@ -17,7 +17,8 @@
 
 enum class DataDistribution {
   Normal,
-  Zipfian
+  Zipfian,
+  Mixed
 };
 
   struct SSTRange {
@@ -34,13 +35,15 @@ struct SSTFileChanges {
 struct DistributionConfig {
     DataDistribution type = DataDistribution::Normal;
 
-    // Zipfian parameters
+    // Distribution parameters
     size_t cardinality = 0;
-    double exponent = 1.0;
+    double exponent = 1.0;   // Zipf exponent
+    double zipfRatio = 0.2;  // Used only for Mixed
 
     // Reproducibility
     uint64_t seed = 12345;
 };
+
 
 struct HashHierarchyTimings {
     uint64_t bloomTime = 0;

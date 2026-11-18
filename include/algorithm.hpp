@@ -559,3 +559,60 @@ inline std::discrete_distribution<size_t> zipfDistribution (const double zipfExp
 
   return zipfDist;
 }
+
+inline std::discrete_distribution<size_t> mixedZipfDistribution(
+    const double zipfExponent,
+    const size_t maxZipfCardinality,
+    const size_t numRecords,
+    const double zipfRatio) {
+
+    std::vector<double> weights;
+    std::discrete_distribution<size_t> mixedDist;
+
+    if (numRecords == 0 || maxZipfCardinality == 0)
+        return mixedDist;
+
+    const size_t cardinality = std::min(
+        static_cast<size_t>(numRecords),
+        maxZipfCardinality);
+
+    if (cardinality == 0)
+        return mixedDist;
+
+    const double ratio = std::clamp(zipfRatio, 0.0, 1.0);
+
+    std::vector<double> zipfWeights;
+    zipfWeights.reserve(cardinality);
+
+    double zipfWeightSum = 0.0;
+
+    for (size_t rank = 1; rank <= cardinality; ++rank) {
+        const double weight =
+            1.0 / std::pow(
+                static_cast<double>(rank),
+                zipfExponent);
+
+        zipfWeights.push_back(weight);
+        zipfWeightSum += weight;
+    }
+
+    weights.reserve(cardinality);
+
+    for (size_t rank = 0; rank < cardinality; ++rank) {
+
+        const double uniformProbability =
+            1.0 / static_cast<double>(cardinality);
+
+        const double zipfProbability =
+            zipfWeights[rank] / zipfWeightSum;
+
+        weights.push_back(
+            (1.0 - ratio) * uniformProbability +
+            ratio * zipfProbability);
+    }
+
+    mixedDist = std::discrete_distribution<size_t>(
+        weights.begin(), weights.end());
+
+    return mixedDist;
+}
