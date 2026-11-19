@@ -1888,13 +1888,13 @@ spdlog::info(
     "Time: {} us",
     candidates.size(),
     sstRanges.size(),
-    gBloomCheckCount,
-    gLeafBloomCheckCount,
-    gSSTCheckCount,
+    gBloomCheckCount.load(),
+    gLeafBloomCheckCount.load(),
+    gSSTCheckCount.load(),
     allKeys.size(),
     matchingKeys.size(),
     sw.elapsedMicros());
-
+    
 return matchingKeys;
 }
 
