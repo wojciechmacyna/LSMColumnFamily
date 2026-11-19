@@ -5,6 +5,12 @@
 #include <string>
 #include <vector>
 #include <random>
+#include <unordered_set>
+
+#include <fstream>
+#include <filesystem>
+#include <stdexcept>
+
 
 #include "test_params.hpp"
 #include "db_manager.hpp"
@@ -81,6 +87,7 @@ size_t hashSingleIndexOpenCount = 0;
 size_t hashSingleLookupCount = 0;
 size_t hashSingleCandidateCount = 0;
 size_t hashSingleVerificationCount = 0;
+size_t matchingColumns = 0;
   
   // Derived metrics: bloom checks minus leaf checks
   size_t multiCol_nonLeafBloomChecks;
@@ -236,6 +243,39 @@ struct GeneratedQuery {
     bool isRealData = false;
 };
 
+struct RealDataExperimentResult {
+    double realDataPercentage = 0.0;
+
+    double avgRealDataMultiTime = 0.0;
+    double avgRealDataSingleTime = 0.0;
+    double avgRealHashIndexTime = 0.0;
+    double avgRealHashSingleIndexTime = 0.0;
+    double avgRealHashSingleHierarchyIndexTime = 0.0;
+
+    double avgFalseDataMultiTime = 0.0;
+    double avgFalseDataSingleTime = 0.0;
+    double avgFalseHashIndexTime = 0.0;
+    double avgFalseHashSingleIndexTime = 0.0;
+    double avgFalseHashSingleHierarchyIndexTime = 0.0;
+
+    double avgHierarchicalMultiTime = 0.0;
+    double avgHierarchicalSingleTime = 0.0;
+    double avgHashIndexTime = 0.0;
+    double avgHashSingleIndexTime = 0.0;
+    double avgHashSingleHierarchyIndexTime = 0.0;
+
+    size_t positiveQueries = 0;
+    size_t negativeQueries = 0;
+    size_t totalQueries = 0;
+};
+
+
+
+void runRealDataExperiment(
+    const std::string& baseDir,
+    const std::string& dbName,
+    size_t sampleSize,
+    int numQueries);
 
 
 uint64_t buildHashIndexesAsync(
@@ -255,6 +295,38 @@ std::map<std::string, std::vector<Node*>> buildLeaves(
     BloomManager& bloomManager,
     const TestParams& params
 );
+
+
+RealDataExperimentResult aggregateMixedQueryResults(
+    const std::vector<MixedQueryResult>& results);
+
+void saveRealDataExperimentResults(
+    const std::string& filename,
+    const RealDataExperimentResult& result,
+    size_t dbSize);
+
+    
+RealDataQueryContext loadRealDataQueryContext(
+    DBManager& dbManager,
+    const std::vector<std::string>& columns,
+    size_t sampleSize,
+    uint64_t seed);
+
+RealDataQueryContext createRealDataQueryContext(
+    DBManager& dbManager,
+    const std::vector<std::string>& columns,
+    size_t sampleSize,
+    uint64_t seed);
+
+std::vector<MixedQueryResult> runMixedQueriesWithRealData(
+    DBManager& dbManager,
+    const std::map<std::string, BloomTree>& hierarchies,
+    const std::vector<std::string>& columns,
+    RealDataQueryContext& realDataContext,
+    int numQueries,
+    double positiveQueryPercentage,
+    const std::map<std::string, std::vector<std::string>>* columnSstFiles);
+
 
 void appendSstBatch(
     const std::vector<std::string>& columns,

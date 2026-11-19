@@ -54,7 +54,8 @@ SRC = \
     bloom/bloom_filter.cpp \
     bloom/node.cpp \
     bloom/MurmurHash3.cpp \
-    src/sst_hash_index.cpp
+    src/sst_hash_index.cpp \
+    src/real_data.cpp
 
 # Convert source files to object files
 OBJ_DIR = obj

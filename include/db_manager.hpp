@@ -26,6 +26,7 @@
 #include "bloom_tree.hpp"
 #include "listener.hpp"
 #include "sst_hash_index.hpp"
+#include "real_data.hpp"
 
 enum class DataDistribution {
   Normal,
@@ -66,6 +67,7 @@ struct HashHierarchyTimings {
     uint64_t rocksDBVerifyTime = 0;
     uint64_t totalTime = 0;
 };
+
 
 
 namespace {
@@ -135,11 +137,21 @@ class DBManager {
   std::vector<std::string> scanSSTFilesForColumn(const std::string &dbname,
                                                  const std::string &column);
 
+RealDataScanResult scanAndSampleRecords(
+    const std::vector<std::string>& columns,
+    size_t sampleSize,
+    uint64_t seed);
+
+
  void importNYCTaxiCSV(
     const std::string& filename,
     size_t maxRecords = 0,
     size_t batchSize = 10000);
 
+    std::vector<RealDataRecord> readRealDataRecords(
+    const std::vector<std::string>& columns,
+    size_t maxRecords,
+    uint64_t seed);
 
 
 SSTFileChanges getCompactionChangesForColumn(

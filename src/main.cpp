@@ -86,7 +86,12 @@ int main(int argc, char* argv[]) {
     // runExp8(baseDir, initMode, skipDbScan);
     //runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     // runExpJ2(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
-    runNYCTaxiImport();
+    //runNYCTaxiImport();
+    runRealDataExperiment(
+    "data",
+    "data/NYCTaxiDB",
+    100'000,
+    1000);
 
   } catch (const std::exception& e) {
     spdlog::error("[Error] {}", e.what());

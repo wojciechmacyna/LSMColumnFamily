@@ -12,6 +12,10 @@
 #include <thread>
 #include <filesystem>
 #include <regex>
+#include <numeric>
+#include <algorithm>
+#include <unordered_set>
+
 
 #include "algorithm.hpp"
 #include "bloom_tree.hpp"
@@ -20,6 +24,10 @@
 #include "stopwatch.hpp"
 #include "sst_hash_index.hpp"
 #include "stopwatch.hpp"
+
+
+
+
 
 extern boost::asio::thread_pool globalThreadPool;
 extern std::atomic<size_t> gBloomCheckCount;
@@ -78,6 +86,53 @@ void runNYCTaxiImport()
     dbManager.closeDB();
 }
 
+RealDataQueryContext createRealDataQueryContext(
+    DBManager& dbManager,
+    const std::vector<std::string>& columns,
+    size_t sampleSize,
+    uint64_t seed)
+{
+    RealDataScanResult scanResult =
+        dbManager.scanAndSampleRecords(columns, sampleSize, seed);
+
+    RealDataQueryContext context;
+
+    context.positiveRecords = std::move(scanResult.sampledRecords);
+    context.combinationHashes =
+        std::move(scanResult.combinationHashes);
+
+    context.recordsScanned = scanResult.recordsScanned;
+    context.queryRng.seed(seed);
+
+    context.distinctValues.resize(columns.size());
+
+    // Collect distinct values from the sampled records.
+    std::vector<std::unordered_set<std::string>> uniqueValues(
+        columns.size());
+
+    for (const auto& record : context.positiveRecords) {
+        for (size_t i = 0; i < record.values.size(); ++i) {
+            if (uniqueValues[i].insert(record.values[i]).second) {
+                context.distinctValues[i].push_back(record.values[i]);
+            }
+        }
+    }
+
+    spdlog::info(
+        "RealDataContext: records={}, sample={}, hash entries={}",
+        context.recordsScanned,
+        context.positiveRecords.size(),
+        context.combinationHashes.size());
+
+    for (size_t i = 0; i < columns.size(); ++i) {
+        spdlog::info(
+            "RealDataContext: column='{}', sampled distinct values={}",
+            columns[i],
+            context.distinctValues[i].size());
+    }
+
+    return context;
+}
 
 
 void initialDB(DBManager& dbManager, BloomManager& bloomManager,   const std::vector<std::string>& columns, 
@@ -955,6 +1010,66 @@ void testPatternGeneration() {
   }
 }
 
+
+RealDataQueryContext loadRealDataQueryContext(
+    DBManager& dbManager,
+    const std::vector<std::string>& columns,
+    size_t sampleSize,
+    uint64_t seed) {
+
+    if (columns.empty()) {
+        throw std::invalid_argument("Columns cannot be empty.");
+    }
+
+    auto scanResult = dbManager.scanAndSampleRecords(
+        columns, sampleSize, seed);
+
+    if (scanResult.sampledRecords.empty()) {
+        throw std::runtime_error("No records found in the database.");
+    }
+
+    RealDataQueryContext context;
+    context.positiveRecords = std::move(scanResult.sampledRecords);
+    context.combinationHashes = std::move(scanResult.combinationHashes);
+    context.recordsScanned = scanResult.recordsScanned;
+    context.queryRng.seed(seed);
+
+    context.distinctValues.resize(columns.size());
+
+    std::vector<std::unordered_set<std::string>> distinctSets(
+        columns.size());
+
+    for (const auto& record : context.positiveRecords) {
+        if (record.values.size() != columns.size()) {
+            throw std::runtime_error("Invalid sampled record.");
+        }
+
+        for (size_t i = 0; i < columns.size(); ++i) {
+            if (distinctSets[i].insert(record.values[i]).second) {
+                context.distinctValues[i].push_back(record.values[i]);
+            }
+        }
+    }
+
+    spdlog::info(
+        "RealDataContext: scanned={} sampled={} uniqueCombinations={}",
+        context.recordsScanned,
+        context.positiveRecords.size(),
+        context.combinationHashes.size());
+
+    for (size_t i = 0; i < columns.size(); ++i) {
+        spdlog::info(
+            "RealDataContext: column={} sampledDistinctValues={}",
+            columns[i],
+            context.distinctValues[i].size());
+    }
+
+    return context;
+}
+
+
+
+
 std::vector<PatternQueryResult> runPatternQueriesWithCsvData(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
     const std::vector<std::string>& columns, size_t dbSize, const DistributionConfig& config) {
@@ -1607,319 +1722,286 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
 }
 
 
-/*
-std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
-    DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
-    const std::vector<std::string>& columns, size_t dbSize, int numQueries, 
-    double realDataPercentage, const DistributionConfig& config,
-  const std::map<std::string, std::vector<std::string>>*
-    columnSstFiles) {
-  std::vector<MixedQueryResult> results;
+std::vector<MixedQueryResult> runMixedQueriesWithRealData(
+    DBManager& dbManager,
+    const std::map<std::string, BloomTree>& hierarchies,
+    const std::vector<std::string>& columns,
+    RealDataQueryContext& realDataContext,
+    int numQueries,
+    double positiveQueryPercentage,
+    const std::map<std::string, std::vector<std::string>>* columnSstFiles)
+{
+    std::vector<MixedQueryResult> results;
 
-  // Setup query trees
-  if (hierarchies.empty() || columns.empty()) {
-    spdlog::warn(
-        "runMixedQueriesWithCsvData: Hierarchies map or "
-        "columns vector is empty, skipping query execution.");
-    return results;
-  }
-
-  std::vector<BloomTree> queryTrees;
-  queryTrees.reserve(columns.size());
-  for (const auto& column : columns) {
-    auto it = hierarchies.find(column);
-    if (it == hierarchies.end()) {
-      spdlog::error(
-          "runMixedQueriesWithCsvData: Hierarchy for column "
-          "'{}' not found. Skipping query execution.",
-          column);
-      return results;
+    if (numQueries <= 0 || columns.empty() ||
+        realDataContext.positiveRecords.empty()) {
+        spdlog::warn(
+            "runMixedQueriesWithRealData: Invalid experiment parameters.");
+        return results;
     }
-    queryTrees.push_back(it->second);
-  }
 
-  if (queryTrees.empty()) {
-    spdlog::error(
-        "runMixedQueriesWithCsvData: No query trees were "
-        "prepared, possibly due to missing hierarchies. Skipping query "
-        "execution.");
+    if (positiveQueryPercentage < 0.0 ||
+        positiveQueryPercentage > 100.0) {
+        throw std::invalid_argument(
+            "positiveQueryPercentage must be between 0 and 100");
+    }
+
+    auto queryTrees = prepareQueryTrees(hierarchies, columns);
+
+    if (queryTrees.empty()) {
+        return results;
+    }
+
+    results.reserve(numQueries);
+
+    std::bernoulli_distribution positiveDistribution(
+        positiveQueryPercentage / 100.0);
+
+    for (int queryIdx = 0; queryIdx < numQueries; ++queryIdx) {
+
+        GeneratedRealDataQuery query;
+        bool generated = false;
+
+        const bool generatePositive =
+            positiveDistribution(realDataContext.queryRng);
+
+        if (generatePositive) {
+            query = generatePositiveRealDataQuery(realDataContext);
+            generated = true;
+        } else {
+            // Rotate through 1, 2 and 3 modified columns.
+            const size_t changedColumns =
+                static_cast<size_t>(queryIdx % 3) + 1;
+
+            generated = generateNegativeRealDataQuery(
+                dbManager,
+                columns,
+                realDataContext,
+                query,
+                changedColumns,
+                100);
+        }
+
+        if (!generated) {
+            spdlog::warn(
+                "runMixedQueriesWithRealData: Could not generate query {}. "
+                "Skipping.",
+                queryIdx);
+            continue;
+        }
+
+        MixedQueryResult result;
+        result.queryIndex = queryIdx;
+        result.isRealData = query.isPositive;
+        result.matchingColumns = query.matchingColumns;
+
+        runHashIndexQueries(
+            dbManager,
+            columns,
+            query.values,
+            columnSstFiles,
+            result);
+
+        runHashSingleHierarchyQuery(
+            dbManager,
+            queryTrees[0],
+            columns,
+            query.values,
+            result);
+
+        runHierarchicalQueries(
+            dbManager,
+            queryTrees,
+            columns,
+            query.values,
+            result);
+
+        results.push_back(std::move(result));
+    }
+
+    spdlog::info(
+        "runMixedQueriesWithRealData: Generated {} out of {} queries.",
+        results.size(),
+        numQueries);
+
     return results;
-  }
-
-  // Calculate how many queries should have real data
-  int numRealQueries = static_cast<int>(std::round(numQueries * realDataPercentage / 100.0));
-  int numFalseQueries = numQueries - numRealQueries;
-
-  spdlog::info("runMixedQueriesWithCsvData: Running {} total queries: {} with real data ({}%), {} with false data ({}%)",
-               numQueries, numRealQueries, realDataPercentage, numFalseQueries, 100.0 - realDataPercentage);
-
-  // Generate permutation patterns for columns (focusing on cases where first column is true)
-  std::vector<std::vector<bool>> patterns = generateDynamicPatterns(columns.size());
-  
-  spdlog::info("runMixedQueriesWithCsvData: Generated {} permutation patterns for {} columns", 
-               patterns.size(), columns.size());
-
-  std::vector<bool> isRealDataQuery(numQueries, false);
-  for (int i = 0; i < numRealQueries; ++i) {
-    isRealDataQuery[i] = true;
-  }
-
-
-  // Shuffle real/false query pattern deterministically.
-std::mt19937_64 shuffleRng(config.seed);
-std::shuffle(
-    isRealDataQuery.begin(),
-    isRealDataQuery.end(),
-    shuffleRng);
-
-// Determine cardinality.
-size_t cardinality = 0;
-
-if (config.type == DataDistribution::Normal) {
-    cardinality = dbSize;
-} else {
-    cardinality = std::max<size_t>(
-        1, std::min(config.cardinality, dbSize));
 }
 
-// Initialize query generators.
-std::mt19937_64 queryRng(config.seed + 1);
+void runRealDataExperiment(
+    const std::string& baseDir,
+    const std::string& dbName,
+    size_t sampleSize,
+    int numQueries)
+{
+    const std::vector<std::string> columns = {
+        "pickup_location",
+        "dropoff_location",
+        "payment_type",
+        "passenger_count",
+        "vendor_id",
+        "ratecode_id"
+    };
 
-std::discrete_distribution<size_t> zipfDist;
-std::uniform_int_distribution<size_t> uniformDist(
-    1, cardinality);
+    constexpr uint64_t seed = 12345;
 
-if (config.type == DataDistribution::Zipfian ||
-    config.type == DataDistribution::Mixed) {
+    spdlog::info(
+        "Starting NYC Taxi real-data experiment: DB='{}'",
+        dbName);
 
-    std::vector<double> weights;
-    weights.reserve(cardinality);
+    DBManager dbManager;
+    BloomManager bloomManager;
 
-    double zipfWeightSum = 0.0;
+    TestParams params{
+        dbName,
+        1'000'000,
+        5,
+        1,
+        20000,
+        4'000'000,
+        3
+    };
 
-    for (size_t rank = 1; rank <= cardinality; ++rank) {
-        const double weight =
-            1.0 / std::pow(
-                static_cast<double>(rank),
-                config.exponent);
+    StopWatch stopwatch;
 
-        weights.push_back(weight);
-        zipfWeightSum += weight;
-    }
+    // -------------------------------------------------
+    // 1. Open existing database
+    // -------------------------------------------------
 
-    if (config.type == DataDistribution::Mixed) {
-        const double zipfRatio =
-            std::clamp(config.zipfRatio, 0.0, 1.0);
+    dbManager.openDB(dbName, columns);
 
-        for (size_t i = 0; i < cardinality; ++i) {
-            const double uniformProbability =
-                1.0 / static_cast<double>(cardinality);
+    // -------------------------------------------------
+    // 2. Discover SST files
+    // -------------------------------------------------
 
-            const double zipfProbability =
-                weights[i] / zipfWeightSum;
+    stopwatch.start();
 
-            weights[i] =
-                (1.0 - zipfRatio) * uniformProbability +
-                zipfRatio * zipfProbability;
+    auto columnSstFiles =
+        scanSstFilesAsync(columns, dbManager, params);
+
+    stopwatch.stop();
+
+    const auto sstScanTime = stopwatch.elapsedMicros();
+
+    spdlog::info(
+        "RealData: SST scan time={} us",
+        sstScanTime);
+
+    // -------------------------------------------------
+    // 3. Build BloomTree hierarchies
+    // -------------------------------------------------
+
+    stopwatch.start();
+
+    auto hierarchies =
+        buildHierarchies(columnSstFiles, bloomManager, params);
+
+    stopwatch.stop();
+
+    const auto bloomBuildTime = stopwatch.elapsedMicros();
+
+    spdlog::info(
+        "RealData: BloomTree build time={} us",
+        bloomBuildTime);
+
+    // -------------------------------------------------
+    // 4. Build Hash Indexes
+    // -------------------------------------------------
+
+    stopwatch.start();
+
+    const auto hashIndexSize =
+        buildHashIndexesAsync(columnSstFiles);
+
+    stopwatch.stop();
+
+    const auto hashBuildTime = stopwatch.elapsedMicros();
+
+    spdlog::info(
+        "RealData: Hash Index build time={} us, size={} bytes",
+        hashBuildTime,
+        hashIndexSize);
+
+    // -------------------------------------------------
+    // 5. Prepare real-data query context
+    // -------------------------------------------------
+
+    stopwatch.start();
+
+    auto realDataContext =
+        createRealDataQueryContext(
+            dbManager,
+            columns,
+            sampleSize,
+            seed);
+
+    stopwatch.stop();
+
+    const auto contextBuildTime = stopwatch.elapsedMicros();
+
+    spdlog::info(
+        "RealData: Query context preparation={} us",
+        contextBuildTime);
+
+    // -------------------------------------------------
+    // 6. Execute queries
+    // -------------------------------------------------
+
+    constexpr double positiveQueryPercentage = 50.0;
+
+    stopwatch.start();
+
+    auto results =
+        runMixedQueriesWithRealData(
+            dbManager,
+            hierarchies,
+            columns,
+            realDataContext,
+            numQueries,
+            positiveQueryPercentage,
+            &columnSstFiles);
+
+    stopwatch.stop();
+
+    const auto queryExecutionTime = stopwatch.elapsedMicros();
+
+    auto aggregatedResults =
+    aggregateMixedQueryResults(results);
+    
+    saveRealDataExperimentResults(
+    "csv/real_data_comparison.csv",
+    aggregatedResults,
+    realDataContext.recordsScanned);
+
+    spdlog::info(
+        "RealData: Query execution={} us, generated queries={}",
+        queryExecutionTime,
+        results.size());
+
+    // -------------------------------------------------
+    // 7. Summary
+    // -------------------------------------------------
+
+    size_t positiveCount = 0;
+    size_t negativeCount = 0;
+
+    for (const auto& result : results) {
+        if (result.isRealData) {
+            ++positiveCount;
+        } else {
+            ++negativeCount;
         }
     }
 
-    zipfDist = std::discrete_distribution<size_t>(
-        weights.begin(), weights.end());
+    spdlog::info(
+        "RealData summary: positive={}, negative={}, total={}",
+        positiveCount,
+        negativeCount,
+        results.size());
+
+    // CSV aggregation will be added in the next step.
 }
 
 
-  StopWatch stopwatch;
-  std::vector<std::string> currentExpectedValues;
-  results.reserve(numQueries);
-
-  for (int queryIdx = 0; queryIdx < numQueries; ++queryIdx) {
-    currentExpectedValues.clear();
-    currentExpectedValues.reserve(columns.size());
-
-    bool useRealData = isRealDataQuery[queryIdx];
-    std::vector<bool> pattern;
-    
-    if (useRealData) {
-      // Use the last pattern (all true) for real data
-      pattern = patterns.back();
-    } else {
-      // Use one of the permutation patterns (except the last one) for false data
-      size_t patternIndex = queryIdx % (patterns.size() - 1);
-      pattern = patterns[patternIndex];
-    }
-    
-
-    size_t randomId;
-
-    if (config.type == DataDistribution::Normal) {
-        randomId = uniformDist(queryRng);
-    } else {
-        randomId = zipfDist(queryRng) + 1;
-    }
-
-    std::string existingValueSuffix = "_value" + std::to_string(randomId);
-    std::string nonExistingValueSuffix = "_wrong" + std::to_string(randomId);
-
-    // Count existing columns for logging
-    size_t existingCount = 0;
-    for (bool val : pattern) {
-      if (val) existingCount++;
-    }
-    double percentageExisting = static_cast<double>(existingCount) / columns.size() * 100.0;
-
-    if (useRealData) {
-      spdlog::info("Query {}: Using REAL data (all true pattern) with ID {}", 
-                   queryIdx + 1, randomId);
-    } else {
-      size_t patternIndex = queryIdx % (patterns.size() - 1);
-      spdlog::info("Query {}: Using FALSE data (pattern {} - {}% existing) with ID {}", 
-                   queryIdx + 1, patternIndex, percentageExisting, randomId);
-    }
-
-    // Generate values based on pattern
-    for (size_t colIdx = 0; colIdx < columns.size() && colIdx < pattern.size(); ++colIdx) {
-      if (pattern[colIdx]) {
-        // existing value
-        currentExpectedValues.push_back(columns[colIdx] + existingValueSuffix);
-      } else {
-        // non-existing value
-        currentExpectedValues.push_back(columns[colIdx] + nonExistingValueSuffix);
-      }
-    }
-
-    MixedQueryResult result;
-    result.queryIndex = queryIdx;
-    result.isRealData = useRealData;
-
-    // --- Hash Index Scan (Multi-Column) ---
-
-  gHashIndexOpenCount = 0;
-  gHashLookupCount = 0;
-  gHashCandidateCount = 0;
-  gHashVerificationCount = 0;
-
-  stopwatch.start();
-
-  [[maybe_unused]] auto resultsData =
-      dbManager.findUsingHashIndexes(
-          columns,
-          currentExpectedValues,
-          *columnSstFiles);
-
-  stopwatch.stop();
-
-result.hashIndexTime = stopwatch.elapsedMicros();
-
-result.hashIndexOpenCount = gHashIndexOpenCount.load();
-result.hashLookupCount = gHashLookupCount.load();
-result.hashCandidateCount = gHashCandidateCount.load();
-result.hashVerificationCount = gHashVerificationCount.load();
-
-
-// --- Hash Single Index Scan ---
-
-gHashIndexOpenCount = 0;
-gHashLookupCount = 0;
-gHashCandidateCount = 0;
-gHashVerificationCount = 0;
-
-stopwatch.start();
-
-[[maybe_unused]] auto resultsDataSingleHash =
-    dbManager.findUsingHashIndexesSingleColumn(
-        columns,
-        currentExpectedValues,
-        *columnSstFiles);
-
-stopwatch.stop();
-
-result.hashSingleIndexTime = stopwatch.elapsedMicros();
-
-result.hashSingleIndexOpenCount = gHashIndexOpenCount.load();
-result.hashSingleLookupCount = gHashLookupCount.load();
-result.hashSingleCandidateCount = gHashCandidateCount.load();
-result.hashSingleVerificationCount = gHashVerificationCount.load();
-
-
-        // --- Hash Single Hierarchy Index Scan ---
-  
-    stopwatch.start();
-
-    HashHierarchyTimings timings;
-
-  auto resultsDataSingleHashHierarchy =
-    dbManager.findUsingSingleHierarchyAndHashIndexes(queryTrees[0], columns, currentExpectedValues, &timings);
-    stopwatch.stop();
-    result.hashSingleHierarchyIndexTime = stopwatch.elapsedMicros();
-  
-  spdlog::info(
-    "HashSingleHierarchy: Bloom={} us, Open={} us, "
-    "Lookup={} us, RangeFilter={} us, SortUnique={} us, "
-    "RocksDBVerify={} us, Total={} us",
-    timings.bloomTime,
-    timings.openTime,
-    timings.lookupTime,
-    timings.rangeFilterTime,
-    timings.sortUniqueTime,
-    timings.rocksDBVerifyTime,
-    timings.totalTime);
-
-
-    // --- Hierarchical Multi-Column Query ---
-    gBloomCheckCount = 0;
-    gLeafBloomCheckCount = 0;
-    gSSTCheckCount = 0;
-    stopwatch.start();
-    [[maybe_unused]] std::vector<std::string> hierarchicalMatches =
-        multiColumnQueryHierarchical(queryTrees, columns, currentExpectedValues, "", "",
-                                     dbManager);
-    stopwatch.stop();
-    result.hierarchicalMultiTime = stopwatch.elapsedMicros();
-    result.multiCol_bloomChecks = gBloomCheckCount.load();
-    result.multiCol_leafBloomChecks = gLeafBloomCheckCount.load();
-    result.multiCol_sstChecks = gSSTCheckCount.load();
-
-    // Calculate derived metrics
-    result.multiCol_nonLeafBloomChecks = result.multiCol_bloomChecks - result.multiCol_leafBloomChecks;
-    
-    // Calculate per-column averages
-    double numCols = static_cast<double>(columns.size());
-    result.multiCol_bloomChecksPerColumn = static_cast<double>(result.multiCol_bloomChecks) / numCols;
-    result.multiCol_leafBloomChecksPerColumn = static_cast<double>(result.multiCol_leafBloomChecks) / numCols;
-    result.multiCol_sstChecksPerColumn = static_cast<double>(result.multiCol_sstChecks) / numCols;
-    result.multiCol_nonLeafBloomChecksPerColumn = static_cast<double>(result.multiCol_nonLeafBloomChecks) / numCols;
-
-    // --- Hierarchical Single Column Query ---
-    gBloomCheckCount = 0;
-    gLeafBloomCheckCount = 0;
-    gSSTCheckCount = 0;
-    stopwatch.start();
-    [[maybe_unused]] std::vector<std::string> singlehierarchyMatches =
-        dbManager.findUsingSingleHierarchy(queryTrees[0], columns,
-                                           currentExpectedValues);
-    stopwatch.stop();
-    result.hierarchicalSingleTime = stopwatch.elapsedMicros();
-    result.singleCol_bloomChecks = gBloomCheckCount.load();
-    result.singleCol_leafBloomChecks = gLeafBloomCheckCount.load();
-    result.singleCol_sstChecks = gSSTCheckCount.load();
-
-    // Calculate derived metrics
-    result.singleCol_nonLeafBloomChecks = result.singleCol_bloomChecks - result.singleCol_leafBloomChecks;
-    
-    // Calculate per-column averages
-    result.singleCol_bloomChecksPerColumn = static_cast<double>(result.singleCol_bloomChecks) ;
-    result.singleCol_leafBloomChecksPerColumn = static_cast<double>(result.singleCol_leafBloomChecks) ;
-    result.singleCol_sstChecksPerColumn = static_cast<double>(result.singleCol_sstChecks) ;
-    result.singleCol_nonLeafBloomChecksPerColumn = static_cast<double>(result.singleCol_nonLeafBloomChecks) ;
-
-    results.push_back(result);
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-
-  return results;
-}
-*/
 
 struct HashIndexCounters {
     size_t indexOpen = 0;
@@ -1944,6 +2026,197 @@ struct HashIndexCounters {
         singleVerification += result.hashSingleVerificationCount;
     }
 };
+
+void saveRealDataExperimentResults(
+    const std::string& filename,
+    const RealDataExperimentResult& result,
+    size_t dbSize)
+{
+    const bool fileExists = std::filesystem::exists(filename);
+
+    std::ofstream csv(
+        filename,
+        std::ios::out | std::ios::app);
+
+    if (!csv.is_open()) {
+        throw std::runtime_error(
+            "Cannot open CSV file: " + filename);
+    }
+
+    if (!fileExists) {
+        csv
+            << "dbSize,realDataPercentage,"
+            << "avgRealDataMultiTime,"
+            << "avgRealDataSingleTime,"
+            << "avgRealHashIndexTime,"
+            << "avgRealHashSingleIndexTime,"
+            << "avgRealHashSingleHierarchyIndexTime,"
+
+            << "avgFalseDataMultiTime,"
+            << "avgFalseDataSingleTime,"
+            << "avgFalseHashIndexTime,"
+            << "avgFalseHashSingleIndexTime,"
+            << "avgFalseHashSingleHierarchyIndexTime,"
+
+            << "avgHierarchicalMultiTime,"
+            << "avgHierarchicalSingleTime,"
+            << "avgHashIndexTime,"
+            << "avgHashSingleIndexTime,"
+            << "avgHashSingleHierarchyIndexTime"
+
+            << "\n";
+    }
+
+    csv
+        << dbSize << ","
+        << result.realDataPercentage << ","
+
+        << result.avgRealDataMultiTime << ","
+        << result.avgRealDataSingleTime << ","
+        << result.avgRealHashIndexTime << ","
+        << result.avgRealHashSingleIndexTime << ","
+        << result.avgRealHashSingleHierarchyIndexTime << ","
+
+        << result.avgFalseDataMultiTime << ","
+        << result.avgFalseDataSingleTime << ","
+        << result.avgFalseHashIndexTime << ","
+        << result.avgFalseHashSingleIndexTime << ","
+        << result.avgFalseHashSingleHierarchyIndexTime << ","
+
+        << result.avgHierarchicalMultiTime << ","
+        << result.avgHierarchicalSingleTime << ","
+        << result.avgHashIndexTime << ","
+        << result.avgHashSingleIndexTime << ","
+        << result.avgHashSingleHierarchyIndexTime
+
+        << "\n";
+
+    csv.close();
+
+    spdlog::info(
+        "RealData: CSV results saved. Positive={}, Negative={}, Total={}",
+        result.positiveQueries,
+        result.negativeQueries,
+        result.totalQueries);
+}
+
+
+RealDataExperimentResult aggregateMixedQueryResults(
+    const std::vector<MixedQueryResult>& results)
+{
+    RealDataExperimentResult aggregated;
+
+    double realMulti = 0.0;
+    double realSingle = 0.0;
+    double realHash = 0.0;
+    double realHashSingle = 0.0;
+    double realHashSingleHierarchy = 0.0;
+
+    double falseMulti = 0.0;
+    double falseSingle = 0.0;
+    double falseHash = 0.0;
+    double falseHashSingle = 0.0;
+    double falseHashSingleHierarchy = 0.0;
+
+    double totalMulti = 0.0;
+    double totalSingle = 0.0;
+    double totalHash = 0.0;
+    double totalHashSingle = 0.0;
+    double totalHashSingleHierarchy = 0.0;
+
+    for (const auto& result : results) {
+
+        ++aggregated.totalQueries;
+
+        if (result.isRealData) {
+            ++aggregated.positiveQueries;
+
+            realMulti += result.hierarchicalMultiTime;
+            realSingle += result.hierarchicalSingleTime;
+            realHash += result.hashIndexTime;
+            realHashSingle += result.hashSingleIndexTime;
+            realHashSingleHierarchy +=
+                result.hashSingleHierarchyIndexTime;
+        }
+        else {
+            ++aggregated.negativeQueries;
+
+            falseMulti += result.hierarchicalMultiTime;
+            falseSingle += result.hierarchicalSingleTime;
+            falseHash += result.hashIndexTime;
+            falseHashSingle += result.hashSingleIndexTime;
+            falseHashSingleHierarchy +=
+                result.hashSingleHierarchyIndexTime;
+        }
+
+        totalMulti += result.hierarchicalMultiTime;
+        totalSingle += result.hierarchicalSingleTime;
+        totalHash += result.hashIndexTime;
+        totalHashSingle += result.hashSingleIndexTime;
+        totalHashSingleHierarchy +=
+            result.hashSingleHierarchyIndexTime;
+    }
+
+    if (aggregated.positiveQueries > 0) {
+        aggregated.avgRealDataMultiTime =
+            realMulti / aggregated.positiveQueries;
+
+        aggregated.avgRealDataSingleTime =
+            realSingle / aggregated.positiveQueries;
+
+        aggregated.avgRealHashIndexTime =
+            realHash / aggregated.positiveQueries;
+
+        aggregated.avgRealHashSingleIndexTime =
+            realHashSingle / aggregated.positiveQueries;
+
+        aggregated.avgRealHashSingleHierarchyIndexTime =
+            realHashSingleHierarchy / aggregated.positiveQueries;
+    }
+
+    if (aggregated.negativeQueries > 0) {
+        aggregated.avgFalseDataMultiTime =
+            falseMulti / aggregated.negativeQueries;
+
+        aggregated.avgFalseDataSingleTime =
+            falseSingle / aggregated.negativeQueries;
+
+        aggregated.avgFalseHashIndexTime =
+            falseHash / aggregated.negativeQueries;
+
+        aggregated.avgFalseHashSingleIndexTime =
+            falseHashSingle / aggregated.negativeQueries;
+
+        aggregated.avgFalseHashSingleHierarchyIndexTime =
+            falseHashSingleHierarchy /
+            aggregated.negativeQueries;
+    }
+
+    if (aggregated.totalQueries > 0) {
+        aggregated.avgHierarchicalMultiTime =
+            totalMulti / aggregated.totalQueries;
+
+        aggregated.avgHierarchicalSingleTime =
+            totalSingle / aggregated.totalQueries;
+
+        aggregated.avgHashIndexTime =
+            totalHash / aggregated.totalQueries;
+
+        aggregated.avgHashSingleIndexTime =
+            totalHashSingle / aggregated.totalQueries;
+
+        aggregated.avgHashSingleHierarchyIndexTime =
+            totalHashSingleHierarchy / aggregated.totalQueries;
+    }
+
+    if (aggregated.totalQueries > 0) {
+        aggregated.realDataPercentage =
+            100.0 * aggregated.positiveQueries /
+            aggregated.totalQueries;
+    }
+
+    return aggregated;
+}
 
 
 std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(

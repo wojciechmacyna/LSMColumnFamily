@@ -10,3 +10,6 @@ DB.md
 /plots*/*.png
 plots/plots/*.png
 compile_commands.json
+
+# NYC Taxi real data and experimental database
+/data/

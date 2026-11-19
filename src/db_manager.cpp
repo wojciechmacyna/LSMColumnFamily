@@ -35,6 +35,138 @@
 extern boost::asio::thread_pool globalThreadPool;
 
 
+#include <algorithm>
+#include <memory>
+#include <random>
+#include <stdexcept>
+
+
+
+RealDataScanResult DBManager::scanAndSampleRecords(
+    const std::vector<std::string>& columns,
+    size_t sampleSize,
+    uint64_t seed)
+{
+    if (columns.empty()) {
+        throw std::invalid_argument(
+            "scanAndSampleRecords: columns cannot be empty");
+    }
+
+    if (!db_) {
+        throw std::runtime_error(
+            "scanAndSampleRecords: database is not open");
+    }
+
+    // Verify that all requested column families exist.
+    std::vector<rocksdb::ColumnFamilyHandle*> handles;
+    handles.reserve(columns.size());
+
+    for (const auto& column : columns) {
+        auto it = cf_handles_.find(column);
+
+        if (it == cf_handles_.end() || !it->second) {
+            throw std::runtime_error(
+                "Column family not found: " + column);
+        }
+
+        handles.push_back(it->second.get());
+    }
+
+    RealDataScanResult result;
+    result.sampledRecords.reserve(sampleSize);
+
+    std::mt19937_64 rng(seed);
+
+    rocksdb::ReadOptions readOptions;
+    readOptions.fill_cache = false;
+
+    // Iterate over the first column family.
+    std::unique_ptr<rocksdb::Iterator> iter(
+        db_->NewIterator(readOptions, handles.front()));
+
+    if (!iter) {
+        throw std::runtime_error(
+            "Failed to create RocksDB iterator");
+    }
+
+    iter->SeekToFirst();
+
+    for (; iter->Valid(); iter->Next()) {
+        RealDataRecord record;
+        record.key = iter->key().ToString();
+        record.values.reserve(columns.size());
+
+        // The first value comes directly from the iterator.
+        record.values.push_back(iter->value().ToString());
+
+        // Read the remaining values using the same key.
+        for (size_t i = 1; i < handles.size(); ++i) {
+            std::string value;
+
+            rocksdb::Status status = db_->Get(
+                readOptions,
+                handles[i],
+                rocksdb::Slice(record.key),
+                &value);
+
+            if (!status.ok()) {
+                throw std::runtime_error(
+                    "Failed to read key '" + record.key +
+                    "' from column family '" + columns[i] +
+                    "': " + status.ToString());
+            }
+
+            record.values.push_back(std::move(value));
+        }
+
+        // Store the hash of every complete record.
+        result.combinationHashes.push_back(
+            hashRealDataCombination(record.values));
+
+        // Reservoir sampling: retain at most sampleSize records.
+        if (result.sampledRecords.size() < sampleSize) {
+            result.sampledRecords.push_back(std::move(record));
+        } else if (sampleSize > 0) {
+            std::uniform_int_distribution<uint64_t> distribution(
+                0, result.recordsScanned);
+
+            uint64_t position = distribution(rng);
+
+            if (position < sampleSize) {
+                result.sampledRecords[position] = std::move(record);
+            }
+        }
+
+        ++result.recordsScanned;
+        if (result.recordsScanned % 100000 == 0) {
+            spdlog::info(
+                "RealDataScan: processed {} records",
+                result.recordsScanned);
+        }
+    }
+
+    if (!iter->status().ok()) {
+        throw std::runtime_error(
+            "Error while scanning database: " +
+            iter->status().ToString());
+    }
+
+    // Sort hashes for binary_search during query generation.
+    std::sort(
+        result.combinationHashes.begin(),
+        result.combinationHashes.end());
+
+    spdlog::info(
+        "RealDataScan: scanned {} records, sampled {}, stored {} combination hashes",
+        result.recordsScanned,
+        result.sampledRecords.size(),
+        result.combinationHashes.size());
+
+    return result;
+}
+
+
+
 
 std::vector<std::string>
 DBManager::findUsingSingleHierarchyAndHashIndexes(
@@ -1627,61 +1759,90 @@ bool DBManager::noBloomcheckValueInColumn(const std::string& column,
 
 std::vector<std::string> DBManager::scanForRecordsInColumns(
     const std::vector<std::string>& columns,
-    const std::vector<std::string>& values) {
-  if (columns.size() != values.size() || columns.empty()) {
-    throw std::runtime_error(
-        "Number of columns and values must be equal and non-empty.");
-  }
-
-  StopWatch sw;
-  sw.start();
-
-  std::vector<std::string> matchingKeys;
-
-  // Use the first column as the base for scanning.
-  auto baseIt = cf_handles_.find(columns[0]);
-  if (baseIt == cf_handles_.end()) {
-    throw std::runtime_error("Column Family not found for base column: " +
-                             columns[0]);
-  }
-
-  rocksdb::ReadOptions readOptions;
-  readOptions.fill_cache = false;
-
-  // Create an iterator for the base column and scan the entire key range.
-  std::unique_ptr<rocksdb::Iterator> iter(
-      db_->NewIterator(readOptions, baseIt->second.get()));
-  iter->SeekToFirst();
-
-  for (; iter->Valid(); iter->Next()) {
-    std::string key = iter->key().ToString();
-    bool allMatch = true;
-    // For each column, get the value associated with the same key.
-    for (size_t i = 0; i < columns.size(); ++i) {
-      auto cfIt = cf_handles_.find(columns[i]);
-      if (cfIt == cf_handles_.end()) {
-        allMatch = false;
-        break;
-      }
-      std::string candidateValue;
-      auto status =
-          db_->Get(readOptions, cfIt->second.get(), key, &candidateValue);
-      if (!status.ok() || candidateValue != values[i]) {
-        allMatch = false;
-        break;
-      }
+    const std::vector<std::string>& values)
+{
+    if (!db_) {
+        throw std::runtime_error("Database is not open.");
     }
-    if (allMatch) {
-      matchingKeys.push_back(key);
+
+    if (columns.size() != values.size() || columns.empty()) {
+        throw std::runtime_error(
+            "Number of columns and values must be equal and non-empty.");
     }
-  }
 
-  sw.stop();
-  spdlog::info(
-      "Scanned entire DB for {} columns in {} µs, found {} matching keys.",
-      columns.size(), sw.elapsedMicros(), matchingKeys.size());
+    std::vector<rocksdb::ColumnFamilyHandle*> handles;
+    handles.reserve(columns.size());
 
-  return matchingKeys;
+    for (const auto& column : columns) {
+        auto* handle = getColumnFamilyHandle(column);
+
+        if (!handle) {
+            throw std::runtime_error(
+                "Column Family not found: " + column);
+        }
+
+        handles.push_back(handle);
+    }
+
+    StopWatch sw;
+    sw.start();
+
+    std::vector<std::string> matchingKeys;
+
+    rocksdb::ReadOptions readOptions;
+    readOptions.fill_cache = false;
+
+    std::unique_ptr<rocksdb::Iterator> iter(
+        db_->NewIterator(readOptions, handles[0]));
+
+    for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+
+        const std::string key = iter->key().ToString();
+
+        // The first column is already available from the iterator.
+        if (iter->value().ToString() != values[0]) {
+            continue;
+        }
+
+        bool allMatch = true;
+
+        for (size_t i = 1; i < columns.size(); ++i) {
+            std::string candidateValue;
+
+            const auto status = db_->Get(
+                readOptions,
+                handles[i],
+                key,
+                &candidateValue);
+
+            if (!status.ok() || candidateValue != values[i]) {
+                allMatch = false;
+                break;
+            }
+        }
+
+        if (allMatch) {
+            matchingKeys.push_back(key);
+        }
+    }
+
+    const auto iteratorStatus = iter->status();
+
+    if (!iteratorStatus.ok()) {
+        throw std::runtime_error(
+            "RocksDB iteration failed: " +
+            iteratorStatus.ToString());
+    }
+
+    sw.stop();
+
+    spdlog::info(
+        "Scanned entire DB for {} columns in {} us, found {} matching keys.",
+        columns.size(),
+        sw.elapsedMicros(),
+        matchingKeys.size());
+
+    return matchingKeys;
 }
 
 std::vector<std::string> DBManager::scanFileForKeysWithValue(
@@ -1984,21 +2145,39 @@ spdlog::info(
 return matchingKeys;
 }
 
-std::string DBManager::getValue(const std::string& column_family_name,
-                                const std::string& key) {
-  rocksdb::PinnableSlice value;
-  rocksdb::ColumnFamilyHandle* cf_handle =
-      getColumnFamilyHandle(column_family_name);
-  if (!cf_handle) {
-    throw std::runtime_error("Column family not found: " + column_family_name);
-  }
-  rocksdb::ReadOptions read_options;
-  rocksdb::Status status =
-      db_->Get(read_options, cf_handle, rocksdb::Slice(key), &value);
-  if (status.ok()) {
-    return value.ToString();
-  }
-  return "";  // Or throw an exception / return status
+std::string DBManager::getValue(
+    const std::string& column_family_name,
+    const std::string& key)
+{
+    if (!db_) {
+        throw std::runtime_error("Database is not open.");
+    }
+
+    auto* cfHandle = getColumnFamilyHandle(column_family_name);
+
+    if (!cfHandle) {
+        throw std::runtime_error(
+            "Column family not found: " + column_family_name);
+    }
+
+    std::string value;
+
+    const auto status = db_->Get(
+        rocksdb::ReadOptions(),
+        cfHandle,
+        key,
+        &value);
+
+    if (status.IsNotFound()) {
+        return "";
+    }
+
+    if (!status.ok()) {
+        throw std::runtime_error(
+            "RocksDB Get failed: " + status.ToString());
+    }
+
+    return value;
 }
 
 rocksdb::ColumnFamilyHandle* DBManager::getColumnFamilyHandle(
