@@ -369,6 +369,8 @@ std::vector<std::string> DBManager::findUsingHashIndexesSingleColumn(
             "Number of columns and values must be equal and non-empty.");
     }
 
+    ++gHashIndexOpenCount;
+
     StopWatch sw;
     sw.start();
 
@@ -415,6 +417,8 @@ std::vector<std::string> DBManager::findUsingHashIndexesSingleColumn(
 
         std::vector<std::string> keys;
 
+        ++gHashLookupCount;
+
         if (!index.lookup(firstValue, keys)) {
             throw std::runtime_error(
                 "Hash index lookup failed: " + indexPath);
@@ -450,6 +454,8 @@ std::vector<std::string> DBManager::findUsingHashIndexesSingleColumn(
 
             std::string currentValue;
 
+            ++gHashVerificationCount;
+
             rocksdb::Status status = db_->Get(
                 rocksdb::ReadOptions(),
                 handleIt->second.get(),
@@ -466,6 +472,8 @@ std::vector<std::string> DBManager::findUsingHashIndexesSingleColumn(
             matchingKeys.push_back(key);
         }
     }
+
+    gHashCandidateCount = uniqueKeys.size();
 
     // --------------------------------------------------
     // 4. Sort results
@@ -539,7 +547,11 @@ std::vector<std::string> DBManager::findUsingHashIndexes(
                     "Cannot open hash index: " + indexPath);
             }
 
+            ++gHashIndexOpenCount;
+
             std::vector<std::string> keys;
+
+            ++gHashLookupCount;
 
             if (!index.lookup(value, keys)) {
                 throw std::runtime_error(
@@ -592,11 +604,15 @@ std::vector<std::string> DBManager::findUsingHashIndexes(
         }
     }
 
+    gHashCandidateCount = candidates.size();
+
     // ---------------------------------------------------------
     // 3. Verify candidates against current RocksDB data.
     // ---------------------------------------------------------
 
     std::vector<std::string> results;
+
+    gHashVerificationCount = candidates.size();
 
     for (const auto& key : candidates) {
 
@@ -914,6 +930,226 @@ if ((config.type == DataDistribution::Zipfian ||
       "Inserted {} records across CFs using {} distribution in {} µs.",
       numRecords, distributionName, sw.elapsedMicros());
 }
+
+
+void DBManager::importNYCTaxiCSV(
+    const std::string& filename,
+    size_t maxRecords,
+    size_t batchSize)
+{
+    if (!db_) {
+        throw std::runtime_error(
+            "Cannot import CSV: database is not open.");
+    }
+
+    if (batchSize == 0) {
+        throw std::invalid_argument(
+            "CSV batchSize must be greater than zero.");
+    }
+
+    StopWatch sw;
+    sw.start();
+
+    const std::vector<std::string> columns = {
+        "pickup_location",
+        "dropoff_location",
+        "payment_type",
+        "passenger_count",
+        "vendor_id",
+        "ratecode_id"
+    };
+
+    // Verify that all required Column Families exist.
+    std::map<std::string, rocksdb::ColumnFamilyHandle*> handles;
+
+    for (const auto& column : columns) {
+        auto it = cf_handles_.find(column);
+
+        if (it == cf_handles_.end() || !it->second) {
+            throw std::runtime_error(
+                "Missing Column Family: " + column);
+        }
+
+        handles[column] = it->second.get();
+    }
+
+    std::ifstream file(filename);
+
+    if (!file.is_open()) {
+        throw std::runtime_error(
+            "Cannot open CSV file: " + filename);
+    }
+
+    // Read CSV header.
+    std::string line;
+
+    if (!std::getline(file, line)) {
+        throw std::runtime_error("CSV file is empty.");
+    }
+
+    // Remove UTF-8 BOM if present.
+    if (line.size() >= 3 &&
+        static_cast<unsigned char>(line[0]) == 0xEF &&
+        static_cast<unsigned char>(line[1]) == 0xBB &&
+        static_cast<unsigned char>(line[2]) == 0xBF) {
+        line.erase(0, 3);
+    }
+
+    std::vector<std::string> header;
+
+    if (!parseCSVLine(line, header)) {
+        throw std::runtime_error(
+            "Invalid CSV header.");
+    }
+
+    // Map required attributes to CSV positions.
+    const std::map<std::string, std::string> csvColumnNames = {
+        {"pickup_location", "PULocationID"},
+        {"dropoff_location", "DOLocationID"},
+        {"payment_type", "payment_type"},
+        {"passenger_count", "passenger_count"},
+        {"vendor_id", "VendorID"},
+        {"ratecode_id", "RatecodeID"}
+    };
+
+    std::map<std::string, size_t> positions;
+
+    for (const auto& column : columns) {
+        const std::string& csvName =
+            csvColumnNames.at(column);
+
+        auto it = std::find(
+            header.begin(), header.end(), csvName);
+
+        if (it == header.end()) {
+            throw std::runtime_error(
+                "CSV column not found: " + csvName);
+        }
+
+        positions[column] =
+            static_cast<size_t>(
+                std::distance(header.begin(), it));
+    }
+
+    spdlog::info(
+        "Starting NYC Taxi CSV import: {}",
+        filename);
+
+    rocksdb::WriteBatch batch;
+
+    size_t importedRecords = 0;
+    size_t skippedRecords = 0;
+    size_t processedRecords = 0;
+    size_t batchRecords = 0;
+
+    uint64_t recordIndex = 1;
+
+    std::vector<std::string> fields;
+
+    while (std::getline(file, line)) {
+
+        if (maxRecords > 0 &&
+            processedRecords >= maxRecords) {
+            break;
+        }
+
+        ++processedRecords;
+
+        if (!parseCSVLine(line, fields)) {
+            ++skippedRecords;
+            continue;
+        }
+
+        bool validRecord = true;
+
+        for (const auto& column : columns) {
+            const size_t position = positions.at(column);
+
+            if (position >= fields.size() ||
+                fields[position].empty()) {
+                validRecord = false;
+                break;
+            }
+        }
+
+        if (!validRecord) {
+            ++skippedRecords;
+            continue;
+        }
+
+        const std::string key =
+            makeRecordKey(recordIndex);
+
+        for (const auto& column : columns) {
+            batch.Put(
+                handles.at(column),
+                key,
+                fields[positions.at(column)]);
+        }
+
+        ++recordIndex;
+        ++importedRecords;
+        ++batchRecords;
+
+        if (batchRecords >= batchSize) {
+            rocksdb::Status status =
+                db_->Write(rocksdb::WriteOptions(), &batch);
+
+            if (!status.ok()) {
+                throw std::runtime_error(
+                    "CSV batch write failed: " +
+                    status.ToString());
+            }
+
+            batch.Clear();
+            batchRecords = 0;
+        }
+    }
+
+    // Write remaining records.
+    if (batchRecords > 0) {
+        rocksdb::Status status =
+            db_->Write(rocksdb::WriteOptions(), &batch);
+
+        if (!status.ok()) {
+            throw std::runtime_error(
+                "Final CSV batch write failed: " +
+                status.ToString());
+        }
+    }
+
+    file.close();
+
+    // Flush all imported Column Families.
+    for (const auto& column : columns) {
+        rocksdb::FlushOptions flushOptions;
+        flushOptions.wait = true;
+
+        rocksdb::Status status =
+            db_->Flush(
+                flushOptions,
+                handles.at(column));
+
+        if (!status.ok()) {
+            throw std::runtime_error(
+                "Flush failed for Column Family " +
+                column + ": " + status.ToString());
+        }
+    }
+
+    sw.stop();
+
+    spdlog::info(
+        "NYC Taxi import completed. "
+        "Imported: {}, skipped: {}, processed: {}, "
+        "batch size: {}, time: {} us",
+        importedRecords,
+        skippedRecords,
+        processedRecords,
+        batchSize,
+        sw.elapsedMicros());
+}
+
 
 
 void DBManager::insertRecordsWithSearchTargets(
@@ -1570,6 +1806,8 @@ std::vector<std::string> DBManager::findUsingSingleHierarchy(
 
     for (const auto& [filename, ranges] : sstRanges) {
 
+        ++gSSTCheckCount;
+
         auto keys = scanSSTForRanges(
             filename,
             values[0],
@@ -1645,9 +1883,14 @@ sw.stop();
 spdlog::info(
     "findUsingSingleHierarchy completed. "
     "Candidates: {}, SST files: {}, "
-    "Unique keys: {}, Matching keys: {}, Time: {} us",
+    "Bloom checks: {}, Leaf Bloom checks: {}, "
+    "SST checks: {}, Unique keys: {}, Matching keys: {}, "
+    "Time: {} us",
     candidates.size(),
     sstRanges.size(),
+    gBloomCheckCount,
+    gLeafBloomCheckCount,
+    gSSTCheckCount,
     allKeys.size(),
     matchingKeys.size(),
     sw.elapsedMicros());

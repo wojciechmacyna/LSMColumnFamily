@@ -1,3 +1,4 @@
+
 #include <vector>
 #include <algorithm>
 #include <string>
@@ -9,6 +10,9 @@
 #include "exp_utils.hpp"
 #include "bloom_manager.hpp"
 
+
+// Runs the J1 experiment for a specific data distribution configuration
+// and cardinality percentage.
 void runExpJ1ForConfig(
     const std::string& baseDir,
     size_t defaultNumRecords,
@@ -17,39 +21,45 @@ void runExpJ1ForConfig(
 {
     const int dbSize = static_cast<int>(defaultNumRecords);
 
+    // Calculate the cardinality based on the requested percentage
+    // of the total number of records. Ensure that cardinality is at least 1.
     const size_t cardinality = std::max<size_t>(
         1,
         static_cast<size_t>(
             defaultNumRecords * capacityPercentage / 100.0));
 
+    // Create a configuration copy and assign the calculated cardinality.
     DistributionConfig currentConfig = config;
     currentConfig.cardinality = cardinality;
 
+    // Convert the distribution type into a string for logging and naming.
     std::string distributionName;
 
     switch (currentConfig.type) {
-      case DataDistribution::Normal:
-          distributionName = "Normal";
-          break;
+        case DataDistribution::Normal:
+            distributionName = "Normal";
+            break;
 
-      case DataDistribution::Zipfian:
-          distributionName = "Zipfian";
-          break;
+        case DataDistribution::Zipfian:
+            distributionName = "Zipfian";
+            break;
 
-      case DataDistribution::Mixed:
-          distributionName = "Mixed";
-          break;
-}
+        case DataDistribution::Mixed:
+            distributionName = "Mixed";
+            break;
+    }
 
-const std::string dbName =
-    baseDir + "/expJ1_" +
-    distributionName + "_" +
-    std::to_string(dbSize) + "_" +
-    std::to_string(capacityPercentage) + "_" +
-    std::to_string(cardinality) + "_" +
-    std::to_string(currentConfig.exponent) + "_" +
-    std::to_string(currentConfig.zipfRatio);
+    // Generate a unique database name based on the experiment parameters.
+    const std::string dbName =
+        baseDir + "/expJ1_" +
+        distributionName + "_" +
+        std::to_string(dbSize) + "_" +
+        std::to_string(capacityPercentage) + "_" +
+        std::to_string(cardinality) + "_" +
+        std::to_string(currentConfig.exponent) + "_" +
+        std::to_string(currentConfig.zipfRatio);
 
+    // Configure database initialization and data generation parameters.
     TestParams params{
         dbName,
         dbSize,
@@ -60,6 +70,7 @@ const std::string dbName =
         3
     };
 
+    // Define the column families used in the experiment.
     const std::vector<std::string> columns{
         "phone", "mail", "address"
     };
@@ -67,11 +78,13 @@ const std::string dbName =
     DBManager dbManager;
     BloomManager bloomManager;
 
+    // Store the BloomTree hierarchy for each column family.
     std::map<std::string, BloomTree> hierarchies;
 
+    // Store the SST files associated with each column family.
     std::map<std::string, std::vector<std::string>> columnSstFiles;
 
-    // Otwarcie i inicjalizacja bazy oraz struktur indeksowych.
+    // Initialize the database and build the required indexing structures.
     initialDB(
         dbManager,
         bloomManager,
@@ -82,7 +95,7 @@ const std::string dbName =
         currentConfig
     );
 
-    // Analiza zapytań.
+    // Execute the comprehensive query analysis for the current configuration.
     auto comprehensiveResults = runComprehensiveQueryAnalysis(
         dbManager,
         hierarchies,
@@ -94,172 +107,190 @@ const std::string dbName =
     );
 
     spdlog::info(
-            "ExpJ1: Generated {} comprehensive analysis results "
-            "for {} columns",
-            comprehensiveResults.size(),
-            columns.size()
-        );
+        "ExpJ1: Generated {} comprehensive analysis results "
+        "for {} columns",
+        comprehensiveResults.size(),
+        columns.size()
+    );
 
-        // --------------------------------------------------
-        // CSV headers
-        // --------------------------------------------------
+    // --------------------------------------------------
+    // Initialize CSV output files and write their headers.
+    // --------------------------------------------------
 
-        writeCsvHeader(
-            "csv/expJ1.csv",
-            "dbSize,distribution,exponent,zipfRatio,cardinality,"
-            "realDataPercentage,"
-            "avgRealMultiTime,avgRealSingleTime,"
-            "avgRealHashTime,avgRealHashSingleTime,"
-            "avgRealHashSingleHierarchyTime,"
-            "avgFalseMultiTime,avgFalseSingleTime,"
-            "avgFalseHashTime,avgFalseHashSingleTime,"
-            "avgFalseHashSingleHierarchyTime,"
-            "avgHierarchicalMultiTime,avgHierarchicalSingleTime,"
-            "avgHashIndexTime,avgHashSingleIndexTime,"
-            "avgHashSingleHierarchyIndexTime"
-        );
+    writeCsvHeader(
+        "csv/expJ1.csv",
+        "dbSize,distribution,exponent,zipfRatio,cardinality,"
+        "realDataPercentage,"
+        "avgRealMultiTime,avgRealSingleTime,"
+        "avgRealHashTime,avgRealHashSingleTime,"
+        "avgRealHashSingleHierarchyTime,"
+        "avgFalseMultiTime,avgFalseSingleTime,"
+        "avgFalseHashTime,avgFalseHashSingleTime,"
+        "avgFalseHashSingleHierarchyTime,"
+        "avgHierarchicalMultiTime,avgHierarchicalSingleTime,"
+        "avgHashIndexTime,avgHashSingleIndexTime,"
+        "avgHashSingleHierarchyIndexTime"
+    );
 
-        std::ofstream expJ1(
-            "csv/expJ1.csv",
-            std::ios::app
-        );
+    std::ofstream expJ1(
+        "csv/expJ1.csv",
+        std::ios::app
+    );
 
-        writeCsvHeader(
-            "csv/exp_1_comprehensive_checks.csv",
-            "dbSize,realDataPercentage,"
-            "avgMultiBloomChecks,avgMultiLeafBloomChecks,"
-            "avgMultiNonLeafBloomChecks,avgMultiSSTChecks,"
-            "avgSingleBloomChecks,avgSingleLeafBloomChecks,"
-            "avgSingleNonLeafBloomChecks,avgSingleSSTChecks,"
-            "avgRealMultiBloomChecks,avgRealMultiSSTChecks,"
-            "avgFalseMultiBloomChecks,avgFalseMultiSSTChecks"
-        );
+    writeCsvHeader(
+        "csv/exp_1_comprehensive_checks.csv",
+        "dbSize,realDataPercentage,"
+        "avgMultiBloomChecks,avgMultiLeafBloomChecks,"
+        "avgMultiNonLeafBloomChecks,avgMultiSSTChecks,"
+        "avgSingleBloomChecks,avgSingleLeafBloomChecks,"
+        "avgSingleNonLeafBloomChecks,avgSingleSSTChecks,"
+        "avgRealMultiBloomChecks,avgRealMultiSSTChecks,"
+        "avgFalseMultiBloomChecks,avgFalseMultiSSTChecks"
+    );
 
-        std::ofstream comprehensive_checks(
-            "csv/exp_1_comprehensive_checks.csv",
-            std::ios::app
-        );
+    std::ofstream comprehensive_checks(
+        "csv/exp_1_comprehensive_checks.csv",
+        std::ios::app
+    );
 
-        writeCsvHeader(
-            "csv/exp_1_per_column_stats.csv",
-            "dbSize,realDataPercentage,numColumns,"
-            "avgMultiBloomPerCol,avgMultiLeafPerCol,"
-            "avgMultiNonLeafPerCol,avgMultiSSTPerCol,"
-            "avgSingleBloomPerCol,avgSingleLeafPerCol,"
-            "avgSingleNonLeafPerCol,avgSingleSSTPerCol,"
-            "avgRealMultiBloomPerCol,avgRealMultiSSTPerCol,"
-            "avgFalseMultiBloomPerCol,avgFalseMultiSSTPerCol"
-        );
+    writeCsvHeader(
+        "csv/exp_1_per_column_stats.csv",
+        "dbSize,realDataPercentage,numColumns,"
+        "avgMultiBloomPerCol,avgMultiLeafPerCol,"
+        "avgMultiNonLeafPerCol,avgMultiSSTPerCol,"
+        "avgSingleBloomPerCol,avgSingleLeafPerCol,"
+        "avgSingleNonLeafPerCol,avgSingleSSTPerCol,"
+        "avgRealMultiBloomPerCol,avgRealMultiSSTPerCol,"
+        "avgFalseMultiBloomPerCol,avgFalseMultiSSTPerCol"
+    );
 
-        std::ofstream per_column_stats(
-            "csv/exp_1_per_column_stats.csv",
-            std::ios::app
-        );
+    std::ofstream per_column_stats(
+        "csv/exp_1_per_column_stats.csv",
+        std::ios::app
+    );
 
-        // --------------------------------------------------
-        // Save results
-        // --------------------------------------------------
+    // --------------------------------------------------
+    // Write the collected experiment results to CSV files.
+    // --------------------------------------------------
 
-        for (const auto& result : comprehensiveResults) {
+    for (const auto& result : comprehensiveResults) {
 
-            // Timing comparison
-            if (expJ1) {
-                expJ1
-                    << dbSize << ","
-                    << distributionName << ","
-                    << currentConfig.exponent << ","
-                    << currentConfig.zipfRatio << ","
-                    << currentConfig.cardinality << ","
-                    << result.realDataPercentage << ","
+        // Save query execution times for the different search methods.
+        if (expJ1) {
+            expJ1
+                << dbSize << ","
+                << distributionName << ","
+                << currentConfig.exponent << ","
+                << currentConfig.zipfRatio << ","
+                << currentConfig.cardinality << ","
+                << result.realDataPercentage << ","
 
-                    << result.avgRealDataMultiTime << ","
-                    << result.avgRealDataSingleTime << ","
-                    << result.avgRealHashIndexTime << ","
-                    << result.avgRealHashSingleIndexTime << ","
-                    << result.avgRealHashSingleHierarchyIndexTime << ","
+                << result.avgRealDataMultiTime << ","
+                << result.avgRealDataSingleTime << ","
+                << result.avgRealHashIndexTime << ","
+                << result.avgRealHashSingleIndexTime << ","
+                << result.avgRealHashSingleHierarchyIndexTime << ","
 
-                    << result.avgFalseDataMultiTime << ","
-                    << result.avgFalseDataSingleTime << ","
-                    << result.avgFalseHashIndexTime << ","
-                    << result.avgFalseHashSingleIndexTime << ","
-                    << result.avgFalseHashSingleHierachyIndexTime << ","
+                << result.avgFalseDataMultiTime << ","
+                << result.avgFalseDataSingleTime << ","
+                << result.avgFalseHashIndexTime << ","
+                << result.avgFalseHashSingleIndexTime << ","
+                << result.avgFalseHashSingleHierachyIndexTime << ","
 
-                    << result.avgHierarchicalMultiTime << ","
-                    << result.avgHierarchicalSingleTime << ","
-                    << result.avgHashIndexTime << ","
-                    << result.avgHashSingleIndexTime << ","
-                    << result.avgHashSingleHierarchyIndexTime
-                    << "\n";
-            }
-
-            // Comprehensive checks
-            if (comprehensive_checks) {
-                comprehensive_checks
-                    << dbSize << ","
-                    << result.realDataPercentage << ","
-
-                    << result.avgMultiBloomChecks << ","
-                    << result.avgMultiLeafBloomChecks << ","
-                    << result.avgMultiNonLeafBloomChecks << ","
-                    << result.avgMultiSSTChecks << ","
-
-                    << result.avgSingleBloomChecks << ","
-                    << result.avgSingleLeafBloomChecks << ","
-                    << result.avgSingleNonLeafBloomChecks << ","
-                    << result.avgSingleSSTChecks << ","
-
-                    << result.avgRealMultiBloomChecks << ","
-                    << result.avgRealMultiSSTChecks << ","
-                    << result.avgFalseMultiBloomChecks << ","
-                    << result.avgFalseMultiSSTChecks
-                    << "\n";
-            }
-
-            // Per-column statistics
-            if (per_column_stats) {
-                per_column_stats
-                    << dbSize << ","
-                    << result.realDataPercentage << ","
-                    << result.numColumns << ","
-
-                    << result.avgMultiBloomChecksPerColumn << ","
-                    << result.avgMultiLeafBloomChecksPerColumn << ","
-                    << result.avgMultiNonLeafBloomChecksPerColumn << ","
-                    << result.avgMultiSSTChecksPerColumn << ","
-
-                    << result.avgSingleBloomChecksPerColumn << ","
-                    << result.avgSingleLeafBloomChecksPerColumn << ","
-                    << result.avgSingleNonLeafBloomChecksPerColumn << ","
-                    << result.avgSingleSSTChecksPerColumn << ","
-
-                    << result.avgRealMultiBloomChecksPerColumn << ","
-                    << result.avgRealMultiSSTChecksPerColumn << ","
-                    << result.avgFalseMultiBloomChecksPerColumn << ","
-                    << result.avgFalseMultiSSTChecksPerColumn
-                    << "\n";
-            }
+                << result.avgHierarchicalMultiTime << ","
+                << result.avgHierarchicalSingleTime << ","
+                << result.avgHashIndexTime << ","
+                << result.avgHashSingleIndexTime << ","
+                << result.avgHashSingleHierarchyIndexTime
+                << "\n";
         }
 
-        // --------------------------------------------------
-        // Cleanup
-        // --------------------------------------------------
+        // Save Bloom filter and SST lookup statistics for query analysis.
+        if (comprehensive_checks) {
+            comprehensive_checks
+                << dbSize << ","
+                << result.realDataPercentage << ","
 
-        comprehensive_checks.close();
-        per_column_stats.close();
-        expJ1.close();
+                << result.avgMultiBloomChecks << ","
+                << result.avgMultiLeafBloomChecks << ","
+                << result.avgMultiNonLeafBloomChecks << ","
+                << result.avgMultiSSTChecks << ","
 
-        dbManager.closeDB();
+                << result.avgSingleBloomChecks << ","
+                << result.avgSingleLeafBloomChecks << ","
+                << result.avgSingleNonLeafBloomChecks << ","
+                << result.avgSingleSSTChecks << ","
 
+                << result.avgRealMultiBloomChecks << ","
+                << result.avgRealMultiSSTChecks << ","
+                << result.avgFalseMultiBloomChecks << ","
+                << result.avgFalseMultiSSTChecks
+                << "\n";
+        }
+
+        // Save statistics normalized by the number of column families.
+        if (per_column_stats) {
+            per_column_stats
+                << dbSize << ","
+                << result.realDataPercentage << ","
+                << result.numColumns << ","
+
+                << result.avgMultiBloomChecksPerColumn << ","
+                << result.avgMultiLeafBloomChecksPerColumn << ","
+                << result.avgMultiNonLeafBloomChecksPerColumn << ","
+                << result.avgMultiSSTChecksPerColumn << ","
+
+                << result.avgSingleBloomChecksPerColumn << ","
+                << result.avgSingleLeafBloomChecksPerColumn << ","
+                << result.avgSingleNonLeafBloomChecksPerColumn << ","
+                << result.avgSingleSSTChecksPerColumn << ","
+
+                << result.avgRealMultiBloomChecksPerColumn << ","
+                << result.avgRealMultiSSTChecksPerColumn << ","
+                << result.avgFalseMultiBloomChecksPerColumn << ","
+                << result.avgFalseMultiSSTChecksPerColumn
+                << "\n";
+        }
+    }
+
+    // --------------------------------------------------
+    // Close output files and release database resources.
+    // --------------------------------------------------
+
+    comprehensive_checks.close();
+    per_column_stats.close();
+    expJ1.close();
+
+    dbManager.closeDB();
+
+      // Remove the database directory after the experiment.
+    std::error_code ec;
+    std::filesystem::remove_all(dbName, ec);
+
+    if (ec) {
+        spdlog::error(
+            "Failed to remove database directory '{}': {}",
+            dbName,
+            ec.message());
+    }
+    else {
         spdlog::info(
-            "ExpJ1: Finished configuration. "
-            "Distribution={}, exponent={}, zipfRatio={}, cardinality={}",
-            distributionName,
-            config.exponent,
-            config.zipfRatio,
-            config.cardinality
-        );
+            "Database directory '{}' removed successfully.",
+            dbName);
+    }
+
+    spdlog::info(
+        "ExpJ1: Finished configuration. "
+        "Distribution={}, exponent={}, zipfRatio={}, cardinality={}",
+        distributionName,
+        currentConfig.exponent,
+        currentConfig.zipfRatio,
+        currentConfig.cardinality
+    );
 }
 
+
+// Runs the J1 experiment using multiple data distribution configurations.
 void runExpJ1(
     std::string baseDir,
     bool initMode,
@@ -269,7 +300,7 @@ void runExpJ1(
 {
     std::vector<DistributionConfig> configurations;
 
-    // 1. Rozkład mieszany: 80% uniform + 20% Zipf.
+    // 1. Mixed distribution: 80% uniform and 20% Zipfian.
     {
         DistributionConfig config;
         config.type = DataDistribution::Mixed;
@@ -279,7 +310,7 @@ void runExpJ1(
         configurations.push_back(config);
     }
 
-    // 2. Rozkład Normal.
+    // 2. Normal distribution.
     {
         DistributionConfig config;
         config.type = DataDistribution::Normal;
@@ -287,7 +318,7 @@ void runExpJ1(
         configurations.push_back(config);
     }
 
-    // 3. Rozkład Zipfian.
+    // 3. Zipfian distribution.
     {
         DistributionConfig config;
         config.type = DataDistribution::Zipfian;
@@ -296,16 +327,19 @@ void runExpJ1(
         configurations.push_back(config);
     }
 
+    // Define the percentage used to calculate the data cardinality.
     const double cardinalityPercentage = 10.0;
 
     spdlog::info(
         "Starting ExpJ1: records={}, configurations={}, capacity={}%",
         defaultNumRecords,
         configurations.size(),
-        cardinalityPercentage);
+        cardinalityPercentage
+    );
 
     size_t experimentNumber = 0;
 
+    // Execute the experiment once for each configured data distribution.
     for (const auto& config : configurations) {
         ++experimentNumber;
 
@@ -317,134 +351,19 @@ void runExpJ1(
             static_cast<int>(config.type),
             config.exponent,
             config.zipfRatio,
-            cardinalityPercentage);
+            cardinalityPercentage
+        );
 
         runExpJ1ForConfig(
             baseDir,
             static_cast<size_t>(defaultNumRecords),
             config,
-            cardinalityPercentage);
+            cardinalityPercentage
+        );
     }
 
     spdlog::info(
         "ExpJ1 completed. Total experiments: {}",
-        experimentNumber);
+        experimentNumber
+    );
 }
-
-
-/*
-void runExpJ1(std::string baseDir, bool initMode, std::string sharedDbName,
-             int defaultNumRecords, bool skipDbScan){
-
-        DistributionConfig config;
-        config.type = DataDistribution::Zipfian;
-        config.exponent = 1.0;
-
-        const std::vector<std::string> columns = {"phone", "mail", "address"};
-
-        // const std::vector<double> capacityPercentages = {1.0};
-        const std::vector<double> capacityPercentages = {0.01, 0.1, 1.0};
-        int dbSize = defaultNumRecords;        
-
-        for (const double percentage : capacityPercentages)
-        {
-            config.cardinality = std::max<size_t>(1,static_cast<size_t>(defaultNumRecords * percentage / 100.0));
-
-            std::string dbName = baseDir + "/dist_shared_db" + std::to_string(percentage);
-
-            TestParams params = {dbName, dbSize, 5, 1, 20000, 4'000'000, 3};
-
-           // Run comprehensive analysis across different real data percentages
-           const int numQueriesPerScenario = 10;
-
-           DBManager dbManager;
-           BloomManager bloomManager;
-           std::map<std::string, BloomTree> hierarchies;
-           std::map<std::string, std::vector<std::string>> columnSstFiles;
-                
-           initialDB(dbManager, bloomManager,  columns, params, hierarchies, columnSstFiles, config);
-
-           spdlog::info("ExpBloomMetrics: Running comprehensive analysis for {} columns with {} queries per scenario", 
-                 columns.size(), numQueriesPerScenario);
-            std::vector<AccumulatedQueryMetrics> comprehensiveResults = runComprehensiveQueryAnalysis(
-                dbManager, hierarchies, columns, dbSize, numQueriesPerScenario, config , &columnSstFiles);
-            
-            spdlog::info("ExpBloomMetrics: Generated {} comprehensive analysis results for {} columns", 
-                        comprehensiveResults.size(), columns.size());
-
-
-
-    writeCsvHeader("csv/expJ1.csv",
-                 "dbSize,realDataPercentage,cardinality,"
-                 "avgRealMultiTime,avgRealSingleTime,avgRealHashTime,avgRealHashSingleTime,avgRealHashSingleHierarchyTime,"
-                 "avgFalseMultiTime,avgFalseSingleTime,avgFalseHashTime, avgFalseHashSingleTime, avgFalseHashSingleHierarchyTime,"
-                 "avgHierarchicalMultiTime,avgHierarchicalSingleTime, avgHashIndexTime, avgHashSingleIndexTime, avgHashSingleHierarchyIndexTime,");
-        std::ofstream expJ1("csv/expJ1.csv", std::ios::app);
-
-    writeCsvHeader("csv/exp_1_comprehensive_checks.csv",
-                 "dbSize,realDataPercentage,"
-                 "avgMultiBloomChecks,avgMultiLeafBloomChecks,avgMultiNonLeafBloomChecks,avgMultiSSTChecks,"
-                 "avgSingleBloomChecks,avgSingleLeafBloomChecks,avgSingleNonLeafBloomChecks,avgSingleSSTChecks,"
-                 "avgRealMultiBloomChecks,avgRealMultiSSTChecks,avgFalseMultiBloomChecks,avgFalseMultiSSTChecks");
-
-    std::ofstream comprehensive_checks("csv/exp_1_comprehensive_checks.csv", std::ios::app);
-
-    writeCsvHeader("csv/exp_1_per_column_stats.csv",
-                 "dbSize,realDataPercentage,numColumns,"
-                 "avgMultiBloomPerCol,avgMultiLeafPerCol,avgMultiNonLeafPerCol,avgMultiSSTPerCol,"
-                 "avgSingleBloomPerCol,avgSingleLeafPerCol,avgSingleNonLeafPerCol,avgSingleSSTPerCol,"
-                 "avgRealMultiBloomPerCol,avgRealMultiSSTPerCol,avgFalseMultiBloomPerCol,avgFalseMultiSSTPerCol");
-
-    std::ofstream per_column_stats("csv/exp_1_per_column_stats.csv", std::ios::app);
-
-  
-
-
-    for (const auto& result : comprehensiveResults) {
-
- 
-      // Timing comparison (8 columns)
-      if (expJ1) {
-        expJ1 << dbSize << "," << result.realDataPercentage << "," << config.cardinality << "," 
-                         << result.avgRealDataMultiTime << "," << result.avgRealDataSingleTime << "," << result.avgRealHashIndexTime 
-                         << "," << result.avgRealHashSingleIndexTime << "," << result.avgRealHashSingleHierarchyIndexTime << ","
-                         << result.avgFalseDataMultiTime << "," << result.avgFalseDataSingleTime << "," << result.avgFalseHashIndexTime << "," 
-                         << result.avgFalseHashSingleIndexTime << "," << result.avgFalseHashSingleHierachyIndexTime << ","
-                         << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "," << result.avgHashIndexTime << "," 
-                         << result.avgHashSingleIndexTime << "," << result.avgHashSingleHierarchyIndexTime << "\n";
-      }
-
-
-
-      // Comprehensive checks (14 columns)
-      if (comprehensive_checks) {
-        comprehensive_checks << dbSize << "," << result.realDataPercentage << ","
-                            << result.avgMultiBloomChecks << "," << result.avgMultiLeafBloomChecks << ","
-                            << result.avgMultiNonLeafBloomChecks << "," << result.avgMultiSSTChecks << ","
-                            << result.avgSingleBloomChecks << "," << result.avgSingleLeafBloomChecks << ","
-                            << result.avgSingleNonLeafBloomChecks << "," << result.avgSingleSSTChecks << ","
-                            << result.avgRealMultiBloomChecks << "," << result.avgRealMultiSSTChecks << ","
-                            << result.avgFalseMultiBloomChecks << "," << result.avgFalseMultiSSTChecks << "\n";
-      }
-
-      // Per-column stats (14 columns)
-      if (per_column_stats) {
-        per_column_stats << dbSize << "," << result.realDataPercentage << "," << result.numColumns << ","
-                        << result.avgMultiBloomChecksPerColumn << "," << result.avgMultiLeafBloomChecksPerColumn << ","
-                        << result.avgMultiNonLeafBloomChecksPerColumn << "," << result.avgMultiSSTChecksPerColumn << ","
-                        << result.avgSingleBloomChecksPerColumn << "," << result.avgSingleLeafBloomChecksPerColumn << ","
-                        << result.avgSingleNonLeafBloomChecksPerColumn << "," << result.avgSingleSSTChecksPerColumn << ","
-                        << result.avgRealMultiBloomChecksPerColumn << "," << result.avgRealMultiSSTChecksPerColumn << ","
-                        << result.avgFalseMultiBloomChecksPerColumn << "," << result.avgFalseMultiSSTChecksPerColumn << "\n";
-      }
-    }
-
-    comprehensive_checks.close();
-    per_column_stats.close();
-    expJ1.close();
-
-
-    dbManager.closeDB();
-  };
-
-}*/

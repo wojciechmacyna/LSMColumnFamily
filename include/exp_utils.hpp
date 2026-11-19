@@ -4,6 +4,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <random>
 
 #include "test_params.hpp"
 #include "db_manager.hpp"
@@ -58,8 +59,6 @@ struct MixedQueryResult {
   bool isRealData;
   long long hierarchicalMultiTime;
   long long hierarchicalSingleTime;
-  long long hashIndexTime;
-  long long hashSingleIndexTime;
   long long hashSingleHierarchyIndexTime;
 
   size_t multiCol_bloomChecks;
@@ -68,6 +67,20 @@ struct MixedQueryResult {
   size_t singleCol_bloomChecks;
   size_t singleCol_leafBloomChecks;
   size_t singleCol_sstChecks;
+
+  // Hash Index - Multi-Column
+double hashIndexTime = 0.0;
+size_t hashIndexOpenCount = 0;
+size_t hashLookupCount = 0;
+size_t hashCandidateCount = 0;
+size_t hashVerificationCount = 0;
+
+// Hash Index - Single-Column
+double hashSingleIndexTime = 0.0;
+size_t hashSingleIndexOpenCount = 0;
+size_t hashSingleLookupCount = 0;
+size_t hashSingleCandidateCount = 0;
+size_t hashSingleVerificationCount = 0;
   
   // Derived metrics: bloom checks minus leaf checks
   size_t multiCol_nonLeafBloomChecks;
@@ -141,6 +154,39 @@ struct AccumulatedQueryMetrics {
   double avgRealMultiSSTChecksPerColumn;
   double avgFalseMultiBloomChecksPerColumn;
   double avgFalseMultiSSTChecksPerColumn;
+
+  // Average Hash Index counters
+double avgHashIndexOpenCount = 0.0;
+double avgHashLookupCount = 0.0;
+double avgHashCandidateCount = 0.0;
+double avgHashVerificationCount = 0.0;
+
+double avgHashSingleIndexOpenCount = 0.0;
+double avgHashSingleLookupCount = 0.0;
+double avgHashSingleCandidateCount = 0.0;
+double avgHashSingleVerificationCount = 0.0;
+
+// Average Real Hash Index counters
+double avgRealHashIndexOpenCount = 0.0;
+double avgRealHashLookupCount = 0.0;
+double avgRealHashCandidateCount = 0.0;
+double avgRealHashVerificationCount = 0.0;
+
+double avgRealHashSingleIndexOpenCount = 0.0;
+double avgRealHashSingleLookupCount = 0.0;
+double avgRealHashSingleCandidateCount = 0.0;
+double avgRealHashSingleVerificationCount = 0.0;
+
+// Average False Hash Index counters
+double avgFalseHashIndexOpenCount = 0.0;
+double avgFalseHashLookupCount = 0.0;
+double avgFalseHashCandidateCount = 0.0;
+double avgFalseHashVerificationCount = 0.0;
+
+double avgFalseHashSingleIndexOpenCount = 0.0;
+double avgFalseHashSingleLookupCount = 0.0;
+double avgFalseHashSingleCandidateCount = 0.0;
+double avgFalseHashSingleVerificationCount = 0.0;
 };
 
 struct AggregatedQueryTimings {
@@ -173,6 +219,23 @@ struct AggregatedQueryTimings {
   
   size_t numColumns;  // Number of columns for reference
 };
+
+
+struct QueryGenerationContext {
+    std::vector<std::vector<bool>> patterns;
+    std::vector<bool> isRealDataQuery;
+
+    std::mt19937_64 queryRng;
+
+    std::uniform_int_distribution<size_t> uniformDist;
+    std::discrete_distribution<size_t> zipfDist;
+};
+
+struct GeneratedQuery {
+    std::vector<std::string> values;
+    bool isRealData = false;
+};
+
 
 
 uint64_t buildHashIndexesAsync(
@@ -223,6 +286,47 @@ std::vector<std::vector<bool>> generateDynamicPatterns(size_t numColumns);
 // Test function to verify pattern generation (for debugging)
 void testPatternGeneration();
 
+std::vector<BloomTree> prepareQueryTrees(
+    const std::map<std::string, BloomTree>& hierarchies,
+    const std::vector<std::string>& columns);
+
+
+GeneratedQuery generateMixedQuery(
+    int queryIdx,
+    const std::vector<std::string>& columns,
+    QueryGenerationContext& context,
+    const DistributionConfig& config);
+
+
+QueryGenerationContext createQueryGenerationContext(
+    size_t numColumns,
+    size_t dbSize,
+    int numQueries,
+    double realDataPercentage,
+    const DistributionConfig& config);
+
+    void runHashIndexQueries(
+    DBManager& dbManager,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    const std::map<std::string, std::vector<std::string>>* columnSstFiles,
+    MixedQueryResult& result);
+
+    void runHashSingleHierarchyQuery(
+    DBManager& dbManager,
+    BloomTree& queryTree,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    MixedQueryResult& result);
+    
+    void runHierarchicalQueries(
+    DBManager& dbManager,
+    std::vector<BloomTree>& queryTrees,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    MixedQueryResult& result);
+
+
 // Function to run pattern queries and collect individual results
 std::vector<PatternQueryResult> runPatternQueriesWithCsvData(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
@@ -245,6 +349,8 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
 void initialDB(DBManager& dbManager, BloomManager& bloomManager,   const std::vector<std::string>& columns, 
   TestParams params, std::map<std::string, BloomTree>& hierarchies,  
   std::map<std::string, std::vector<std::string>> &columnSstFiles, const DistributionConfig config);
+
+void runNYCTaxiImport();
 
 void writeCsvHeader(const std::string& filename, const std::string& headerLine);
 

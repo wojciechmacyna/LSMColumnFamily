@@ -19,3 +19,8 @@ Running for the first parameter set creates all databases.
 Plots:
 
 Copy the csv files to subdirectories: bestcase and sst (changing name is required)
+
+git pull origin journal
+
+git restore .
+ 

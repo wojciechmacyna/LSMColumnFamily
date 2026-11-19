@@ -570,31 +570,40 @@ std::vector<std::string> BloomTree::query(const std::string& value,
     return results;
 }
 
-// search that returns nodes
-void BloomTree::searchNodes(Node* node, const std::string& value,
-                            const std::string& qStart, const std::string& qEnd,
-                            std::vector<const Node*>& results) const {
+// Search the BloomTree and return matching leaf nodes.
+void BloomTree::searchNodes(
+    Node* node,
+    const std::string& value,
+    const std::string& qStart,
+    const std::string& qEnd,
+    std::vector<const Node*>& results) const
+{
     if (!node) return;
 
     bool overlaps =
         (qEnd.empty() || node->startKey <= qEnd) &&
         (qStart.empty() || node->endKey >= qStart);
 
-    if (overlaps) {
-        ++gBloomCheckCount;
-        
-        // Track leaf bloom filter checks
-        if (node->filename != "Memory") {
-            ++gLeafBloomCheckCount;
+    if (!overlaps) {
+        return;
+    }
+
+    // Count all Bloom filter checks, including internal nodes and leaves.
+    ++gBloomCheckCount;
+
+    // Count Bloom filter checks performed on leaf nodes.
+    if (node->children.empty()) {
+        ++gLeafBloomCheckCount;
+    }
+
+    if (node->bloom.exists(value)) {
+
+        if (node->children.empty()) {
+            results.push_back(node);
         }
-        
-        if (node->bloom.exists(value)) {
-            if (node->children.empty()) {
-                results.push_back(node);
-            } else {
-                for (Node* child : node->children) {
-                    searchNodes(child, value, qStart, qEnd, results);
-                }
+        else {
+            for (Node* child : node->children) {
+                searchNodes(child, value, qStart, qEnd, results);
             }
         }
     }

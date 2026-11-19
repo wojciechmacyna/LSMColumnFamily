@@ -11,6 +11,18 @@
 #include <unordered_set>
 #include <vector>
 
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <filesystem>
+#include <chrono>
+#include <cstdint>
+#include <iomanip>
+#include <limits>
+
+#include <rocksdb/write_batch.h>
+#include <rocksdb/options.h>
+
 #include "bloom_tree.hpp"
 #include "listener.hpp"
 #include "sst_hash_index.hpp"
@@ -21,7 +33,7 @@ enum class DataDistribution {
   Mixed
 };
 
-  struct SSTRange {
+struct SSTRange {
     std::string startKey;
     std::string endKey;
   };
@@ -55,6 +67,58 @@ struct HashHierarchyTimings {
     uint64_t totalTime = 0;
 };
 
+
+namespace {
+
+bool parseCSVLine(
+    const std::string& line,
+    std::vector<std::string>& fields)
+{
+    fields.clear();
+
+    std::string field;
+    bool insideQuotes = false;
+
+    for (size_t i = 0; i < line.size(); ++i) {
+        const char c = line[i];
+
+        if (c == '"') {
+            if (insideQuotes &&
+                i + 1 < line.size() &&
+                line[i + 1] == '"') {
+                field += '"';
+                ++i;
+            } else {
+                insideQuotes = !insideQuotes;
+            }
+        }
+        else if (c == ',' && !insideQuotes) {
+            fields.push_back(field);
+            field.clear();
+        }
+        else {
+            field += c;
+        }
+    }
+
+    if (insideQuotes) {
+        return false;
+    }
+
+    fields.push_back(field);
+    return true;
+}
+
+std::string makeRecordKey(uint64_t index)
+{
+    std::ostringstream key;
+    key << "key" << std::setw(20) << std::setfill('0') << index;
+    return key.str();
+}
+
+}
+
+
 class DBManager {
  public:
   void compactAllColumnFamilies(size_t numRecords = 0);
@@ -70,6 +134,13 @@ class DBManager {
       const std::unordered_set<int> &targetIndices);
   std::vector<std::string> scanSSTFilesForColumn(const std::string &dbname,
                                                  const std::string &column);
+
+ void importNYCTaxiCSV(
+    const std::string& filename,
+    size_t maxRecords = 0,
+    size_t batchSize = 10000);
+
+
 
 SSTFileChanges getCompactionChangesForColumn(
         const std::string& dbname,

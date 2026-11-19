@@ -29,6 +29,13 @@ inline std::atomic<size_t> gLeafBloomCheckCount{0};
 /// Global counter of SSTables checked
 inline std::atomic<size_t> gSSTCheckCount{0};
 
+inline std::atomic<size_t> gHashIndexOpenCount{0};
+inline std::atomic<size_t> gHashLookupCount{0};
+inline std::atomic<size_t> gHashCandidateCount{0};
+
+
+inline std::atomic<size_t> gHashVerificationCount{0};
+
 // Combination of nodes
 struct Combo {
   std::vector<Node*> nodes;  // One node per column.
@@ -37,18 +44,6 @@ struct Combo {
 };
 
 inline std::vector<std::string> globalfinalMatches;
-
-// Not used
-inline void computeIntersection(const std::vector<Node*>& nodes,
-                                std::string& outStart, std::string& outEnd) {
-  if (nodes.empty()) return;
-  outStart = nodes[0]->startKey;
-  outEnd = nodes[0]->endKey;
-  for (size_t i = 1; i < nodes.size(); ++i) {
-    outStart = std::max(outStart, nodes[i]->startKey);
-    outEnd = std::min(outEnd, nodes[i]->endKey);
-  }
-}
 
 
 inline void normalizeSSTRanges(std::vector<SSTRange>& ranges)
@@ -239,10 +234,10 @@ inline std::vector<std::string> finalSstScanAndIntersect(
    
 
     // 5. Verify candidates against current RocksDB values.
-std::vector<std::string> verifiedResults;
-verifiedResults.reserve(result.size());
+    std::vector<std::string> verifiedResults;
+    verifiedResults.reserve(result.size());
 
-for (const auto& key : result) {
+    for (const auto& key : result) {
 
     bool valid = true;
 
@@ -282,15 +277,22 @@ inline void dfsMultiColumn(
     }
 
     // 1. Check root Bloom Filters.
+
     if (isInitialCall) {
         for (size_t i = 0; i < n; ++i) {
+            Node* node = currentCombo.nodes[i];
+
             ++gBloomCheckCount;
 
-            if (!currentCombo.nodes[i]->bloom.exists(values[i])) {
+            if (node->isLeaf()) {
+                ++gLeafBloomCheckCount;
+            }
+
+            if (!node->bloom.exists(values[i])) {
                 return;
             }
-        }
     }
+}
 
     // 2. Check common key range.
     if (currentCombo.rangeStart > currentCombo.rangeEnd) {
@@ -461,11 +463,6 @@ inline std::vector<std::string> multiColumnQueryHierarchical(
     sw.stop();
     return {};
 }
-
-    // Reset counters
-    gBloomCheckCount = 0;
-    gLeafBloomCheckCount = 0;
-    gSSTCheckCount = 0;
 
     // Check roots
     for (const auto& tree : trees) {

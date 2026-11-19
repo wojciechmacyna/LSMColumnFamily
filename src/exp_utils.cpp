@@ -50,6 +50,36 @@ void clearBloomFilterFiles(const std::string& dbDir) {
 }
 
 
+void runNYCTaxiImport()
+{
+    const std::string dbName = "data/NYCTaxiDB";
+    const std::string csvFile = "data/yellow_tripdata_2016-03.csv";
+
+    const std::vector<std::string> columns = {
+        "pickup_location",
+        "dropoff_location",
+        "payment_type",
+        "passenger_count",
+        "vendor_id",
+        "ratecode_id"
+    };
+
+    DBManager dbManager;
+
+    // Open database and create required Column Families.
+    dbManager.openDB(dbName, columns, true);
+
+    // Import first 10 million CSV records.
+    dbManager.importNYCTaxiCSV(
+        csvFile,
+        10'000'000,
+        10'000);
+
+    dbManager.closeDB();
+}
+
+
+
 void initialDB(DBManager& dbManager, BloomManager& bloomManager,   const std::vector<std::string>& columns, 
   TestParams params, std::map<std::string, BloomTree>& hierarchies,  
   std::map<std::string, std::vector<std::string>> &columnSstFiles, const DistributionConfig config){
@@ -1098,6 +1128,486 @@ std::vector<PatternQueryResult> runPatternQueriesWithCsvData(
   return results;
 }
 
+
+
+
+
+std::vector<BloomTree> prepareQueryTrees(
+    const std::map<std::string, BloomTree>& hierarchies,
+    const std::vector<std::string>& columns)
+{
+    std::vector<BloomTree> queryTrees;
+
+    if (hierarchies.empty() || columns.empty()) {
+        spdlog::warn(
+            "prepareQueryTrees: Hierarchies or columns are empty.");
+        return queryTrees;
+    }
+
+    queryTrees.reserve(columns.size());
+
+    for (const auto& column : columns) {
+        auto it = hierarchies.find(column);
+
+        if (it == hierarchies.end()) {
+            spdlog::error(
+                "prepareQueryTrees: Hierarchy for column '{}' not found.",
+                column);
+            return {};
+        }
+
+        queryTrees.push_back(it->second);
+    }
+
+    return queryTrees;
+}
+
+
+
+QueryGenerationContext createQueryGenerationContext(
+    size_t numColumns,
+    size_t dbSize,
+    int numQueries,
+    double realDataPercentage,
+    const DistributionConfig& config)
+{
+    QueryGenerationContext context;
+
+    const int numRealQueries = static_cast<int>(
+        std::round(numQueries * realDataPercentage / 100.0));
+
+    const int numFalseQueries = numQueries - numRealQueries;
+
+    spdlog::info(
+        "Running {} queries: {} real ({}%), {} false ({}%).",
+        numQueries,
+        numRealQueries,
+        realDataPercentage,
+        numFalseQueries,
+        100.0 - realDataPercentage);
+
+    context.patterns = generateDynamicPatterns(numColumns);
+
+    spdlog::info(
+        "Generated {} permutation patterns for {} columns.",
+        context.patterns.size(),
+        numColumns);
+
+    context.isRealDataQuery.assign(numQueries, false);
+
+    for (int i = 0; i < numRealQueries; ++i) {
+        context.isRealDataQuery[i] = true;
+    }
+
+    std::mt19937_64 shuffleRng(config.seed);
+
+    std::shuffle(
+        context.isRealDataQuery.begin(),
+        context.isRealDataQuery.end(),
+        shuffleRng);
+
+    const size_t cardinality =
+        config.type == DataDistribution::Normal
+            ? dbSize
+            : std::max<size_t>(
+                  1,
+                  std::min(config.cardinality, dbSize));
+
+    context.queryRng.seed(config.seed + 1);
+
+    context.uniformDist =
+        std::uniform_int_distribution<size_t>(1, cardinality);
+
+    if (config.type == DataDistribution::Zipfian ||
+        config.type == DataDistribution::Mixed) {
+
+        std::vector<double> weights;
+        weights.reserve(cardinality);
+
+        double zipfWeightSum = 0.0;
+
+        for (size_t rank = 1; rank <= cardinality; ++rank) {
+            const double weight =
+                1.0 / std::pow(
+                    static_cast<double>(rank),
+                    config.exponent);
+
+            weights.push_back(weight);
+            zipfWeightSum += weight;
+        }
+
+        if (config.type == DataDistribution::Mixed) {
+            const double zipfRatio =
+                std::clamp(config.zipfRatio, 0.0, 1.0);
+
+            for (size_t i = 0; i < cardinality; ++i) {
+                const double uniformProbability =
+                    1.0 / static_cast<double>(cardinality);
+
+                const double zipfProbability =
+                    weights[i] / zipfWeightSum;
+
+                weights[i] =
+                    (1.0 - zipfRatio) * uniformProbability +
+                    zipfRatio * zipfProbability;
+            }
+        }
+
+        context.zipfDist =
+            std::discrete_distribution<size_t>(
+                weights.begin(),
+                weights.end());
+    }
+
+    return context;
+}
+
+
+GeneratedQuery generateMixedQuery(
+    int queryIdx,
+    const std::vector<std::string>& columns,
+    QueryGenerationContext& context,
+    const DistributionConfig& config)
+{
+    GeneratedQuery query;
+
+    query.isRealData = context.isRealDataQuery[queryIdx];
+
+    size_t patternIndex = 0;
+
+    if (query.isRealData) {
+        patternIndex = context.patterns.size() - 1;
+    } else {
+        patternIndex =
+            queryIdx % (context.patterns.size() - 1);
+    }
+
+    const auto& pattern = context.patterns[patternIndex];
+
+    const size_t randomId =
+        config.type == DataDistribution::Normal
+            ? context.uniformDist(context.queryRng)
+            : context.zipfDist(context.queryRng) + 1;
+
+    const std::string existingSuffix =
+        "_value" + std::to_string(randomId);
+
+    const std::string nonExistingSuffix =
+        "_wrong" + std::to_string(randomId);
+
+    const size_t existingCount =
+        std::count(pattern.begin(), pattern.end(), true);
+
+    const double percentageExisting =
+        static_cast<double>(existingCount) /
+        static_cast<double>(columns.size()) * 100.0;
+
+    if (query.isRealData) {
+        spdlog::info(
+            "Query {}: REAL data with ID {}.",
+            queryIdx + 1,
+            randomId);
+    } else {
+        spdlog::info(
+            "Query {}: FALSE data (pattern {} - {}% existing) with ID {}.",
+            queryIdx + 1,
+            patternIndex,
+            percentageExisting,
+            randomId);
+    }
+
+    query.values.reserve(columns.size());
+
+    for (size_t i = 0; i < columns.size() && i < pattern.size(); ++i) {
+        const std::string& suffix =
+            pattern[i] ? existingSuffix : nonExistingSuffix;
+
+        query.values.push_back(columns[i] + suffix);
+    }
+
+    return query;
+}
+
+
+
+void runHashIndexQueries(
+    DBManager& dbManager,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    const std::map<std::string, std::vector<std::string>>* columnSstFiles,
+    MixedQueryResult& result)
+{
+    if (columnSstFiles == nullptr) {
+        spdlog::warn(
+            "Hash Index queries skipped: columnSstFiles is null.");
+        return;
+    }
+
+    StopWatch stopwatch;
+
+    // Hash Index Multi-Column
+    gHashIndexOpenCount = 0;
+    gHashLookupCount = 0;
+    gHashCandidateCount = 0;
+    gHashVerificationCount = 0;
+
+    stopwatch.start();
+
+    [[maybe_unused]] auto multiResults =
+        dbManager.findUsingHashIndexes(
+            columns,
+            values,
+            *columnSstFiles);
+
+    stopwatch.stop();
+
+    result.hashIndexTime = stopwatch.elapsedMicros();
+    result.hashIndexOpenCount = gHashIndexOpenCount.load();
+    result.hashLookupCount = gHashLookupCount.load();
+    result.hashCandidateCount = gHashCandidateCount.load();
+    result.hashVerificationCount = gHashVerificationCount.load();
+
+    // Hash Index Single-Column
+    gHashIndexOpenCount = 0;
+    gHashLookupCount = 0;
+    gHashCandidateCount = 0;
+    gHashVerificationCount = 0;
+
+    stopwatch.start();
+
+    [[maybe_unused]] auto singleResults =
+        dbManager.findUsingHashIndexesSingleColumn(
+            columns,
+            values,
+            *columnSstFiles);
+
+    stopwatch.stop();
+
+    result.hashSingleIndexTime = stopwatch.elapsedMicros();
+    result.hashSingleIndexOpenCount = gHashIndexOpenCount.load();
+    result.hashSingleLookupCount = gHashLookupCount.load();
+    result.hashSingleCandidateCount = gHashCandidateCount.load();
+    result.hashSingleVerificationCount =
+        gHashVerificationCount.load();
+}
+
+
+  void runHashSingleHierarchyQuery(
+    DBManager& dbManager,
+    BloomTree& queryTree,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    MixedQueryResult& result)
+{
+    StopWatch stopwatch;
+    HashHierarchyTimings timings;
+
+    stopwatch.start();
+
+    [[maybe_unused]] auto matches =
+        dbManager.findUsingSingleHierarchyAndHashIndexes(
+            queryTree,
+            columns,
+            values,
+            &timings);
+
+    stopwatch.stop();
+
+    result.hashSingleHierarchyIndexTime =
+        stopwatch.elapsedMicros();
+
+    spdlog::info(
+        "HashSingleHierarchy: Bloom={} us, Open={} us, "
+        "Lookup={} us, RangeFilter={} us, SortUnique={} us, "
+        "RocksDBVerify={} us, Total={} us",
+        timings.bloomTime,
+        timings.openTime,
+        timings.lookupTime,
+        timings.rangeFilterTime,
+        timings.sortUniqueTime,
+        timings.rocksDBVerifyTime,
+        timings.totalTime);
+}
+
+void runHierarchicalQueries(
+    DBManager& dbManager,
+    std::vector<BloomTree>& queryTrees,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    MixedQueryResult& result)
+{
+    StopWatch stopwatch;
+
+    // Hierarchical Multi-Column Query
+    gBloomCheckCount = 0;
+    gLeafBloomCheckCount = 0;
+    gSSTCheckCount = 0;
+
+    stopwatch.start();
+
+    [[maybe_unused]] auto multiMatches =
+        multiColumnQueryHierarchical(
+            queryTrees,
+            columns,
+            values,
+            "",
+            "",
+            dbManager);
+
+    stopwatch.stop();
+
+    result.hierarchicalMultiTime = stopwatch.elapsedMicros();
+
+    result.multiCol_bloomChecks = gBloomCheckCount.load();
+    result.multiCol_leafBloomChecks = gLeafBloomCheckCount.load();
+    result.multiCol_sstChecks = gSSTCheckCount.load();
+
+    result.multiCol_nonLeafBloomChecks =
+        result.multiCol_bloomChecks -
+        result.multiCol_leafBloomChecks;
+
+    const double numCols = static_cast<double>(columns.size());
+
+    result.multiCol_bloomChecksPerColumn =
+        result.multiCol_bloomChecks / numCols;
+
+    result.multiCol_leafBloomChecksPerColumn =
+        result.multiCol_leafBloomChecks / numCols;
+
+    result.multiCol_sstChecksPerColumn =
+        result.multiCol_sstChecks / numCols;
+
+    result.multiCol_nonLeafBloomChecksPerColumn =
+        result.multiCol_nonLeafBloomChecks / numCols;
+
+    // Hierarchical Single-Column Query
+    gBloomCheckCount = 0;
+    gLeafBloomCheckCount = 0;
+    gSSTCheckCount = 0;
+
+    stopwatch.start();
+
+    [[maybe_unused]] auto singleMatches =
+        dbManager.findUsingSingleHierarchy(
+            queryTrees[0],
+            columns,
+            values);
+
+    stopwatch.stop();
+
+    result.hierarchicalSingleTime = stopwatch.elapsedMicros();
+
+    result.singleCol_bloomChecks = gBloomCheckCount.load();
+    result.singleCol_leafBloomChecks = gLeafBloomCheckCount.load();
+    result.singleCol_sstChecks = gSSTCheckCount.load();
+
+    result.singleCol_nonLeafBloomChecks =
+        result.singleCol_bloomChecks -
+        result.singleCol_leafBloomChecks;
+
+    result.singleCol_bloomChecksPerColumn =
+        static_cast<double>(result.singleCol_bloomChecks);
+
+    result.singleCol_leafBloomChecksPerColumn =
+        static_cast<double>(result.singleCol_leafBloomChecks);
+
+    result.singleCol_sstChecksPerColumn =
+        static_cast<double>(result.singleCol_sstChecks);
+
+    result.singleCol_nonLeafBloomChecksPerColumn =
+        static_cast<double>(result.singleCol_nonLeafBloomChecks);
+}
+
+
+
+std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
+    DBManager& dbManager,
+    const std::map<std::string, BloomTree>& hierarchies,
+    const std::vector<std::string>& columns,
+    size_t dbSize,
+    int numQueries,
+    double realDataPercentage,
+    const DistributionConfig& config,
+    const std::map<std::string, std::vector<std::string>>* columnSstFiles)
+{
+    std::vector<MixedQueryResult> results;
+
+    if (numQueries <= 0 || columns.empty() || dbSize == 0) {
+        spdlog::warn(
+            "runMixedQueriesWithCsvData: Invalid experiment parameters.");
+        return results;
+    }
+
+    // Prepare query trees.
+    auto queryTrees = prepareQueryTrees(hierarchies, columns);
+
+    if (queryTrees.empty()) {
+        return results;
+    }
+
+    // Initialize query generation.
+    auto generationContext = createQueryGenerationContext(
+        columns.size(),
+        dbSize,
+        numQueries,
+        realDataPercentage,
+        config);
+
+    if (generationContext.patterns.size() < 2) {
+        spdlog::error(
+            "runMixedQueriesWithCsvData: At least two query patterns are required.");
+        return results;
+    }
+
+    results.reserve(numQueries);
+
+    // Execute queries.
+    for (int queryIdx = 0; queryIdx < numQueries; ++queryIdx) {
+
+        // Generate query.
+        GeneratedQuery query = generateMixedQuery(
+            queryIdx,
+            columns,
+            generationContext,
+            config);
+
+        MixedQueryResult result;
+        result.queryIndex = queryIdx;
+        result.isRealData = query.isRealData;
+
+        // Execute search strategies.
+        runHashIndexQueries(
+            dbManager,
+            columns,
+            query.values,
+            columnSstFiles,
+            result);
+
+        runHashSingleHierarchyQuery(
+            dbManager,
+            queryTrees[0],
+            columns,
+            query.values,
+            result);
+
+        runHierarchicalQueries(
+            dbManager,
+            queryTrees,
+            columns,
+            query.values,
+            result);
+
+        results.push_back(std::move(result));
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(10));
+    }
+
+    return results;
+}
+
+
+/*
 std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
     DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
     const std::vector<std::string>& columns, size_t dbSize, int numQueries, 
@@ -1153,8 +1663,6 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
   for (int i = 0; i < numRealQueries; ++i) {
     isRealDataQuery[i] = true;
   }
-
-
 
 
   // Shuffle real/false query pattern deterministically.
@@ -1284,21 +1792,54 @@ if (config.type == DataDistribution::Zipfian ||
     result.queryIndex = queryIdx;
     result.isRealData = useRealData;
 
-    // --- Hash Index Scan ---
-  
-    stopwatch.start();
-    auto resultsData = dbManager.findUsingHashIndexes(columns,currentExpectedValues,*columnSstFiles);
-    stopwatch.stop();
-    result.hashIndexTime = stopwatch.elapsedMicros();
+    // --- Hash Index Scan (Multi-Column) ---
+
+  gHashIndexOpenCount = 0;
+  gHashLookupCount = 0;
+  gHashCandidateCount = 0;
+  gHashVerificationCount = 0;
+
+  stopwatch.start();
+
+  [[maybe_unused]] auto resultsData =
+      dbManager.findUsingHashIndexes(
+          columns,
+          currentExpectedValues,
+          *columnSstFiles);
+
+  stopwatch.stop();
+
+result.hashIndexTime = stopwatch.elapsedMicros();
+
+result.hashIndexOpenCount = gHashIndexOpenCount.load();
+result.hashLookupCount = gHashLookupCount.load();
+result.hashCandidateCount = gHashCandidateCount.load();
+result.hashVerificationCount = gHashVerificationCount.load();
 
 
-        // --- Hash Single Index Scan ---
-  
-    stopwatch.start();
-    auto resultsDataSingleHash = dbManager.findUsingHashIndexesSingleColumn(columns,currentExpectedValues,*columnSstFiles);
-    stopwatch.stop();
-    result.hashSingleIndexTime = stopwatch.elapsedMicros();
+// --- Hash Single Index Scan ---
 
+gHashIndexOpenCount = 0;
+gHashLookupCount = 0;
+gHashCandidateCount = 0;
+gHashVerificationCount = 0;
+
+stopwatch.start();
+
+[[maybe_unused]] auto resultsDataSingleHash =
+    dbManager.findUsingHashIndexesSingleColumn(
+        columns,
+        currentExpectedValues,
+        *columnSstFiles);
+
+stopwatch.stop();
+
+result.hashSingleIndexTime = stopwatch.elapsedMicros();
+
+result.hashSingleIndexOpenCount = gHashIndexOpenCount.load();
+result.hashSingleLookupCount = gHashLookupCount.load();
+result.hashSingleCandidateCount = gHashCandidateCount.load();
+result.hashSingleVerificationCount = gHashVerificationCount.load();
 
 
         // --- Hash Single Hierarchy Index Scan ---
@@ -1378,194 +1919,454 @@ if (config.type == DataDistribution::Zipfian ||
 
   return results;
 }
+*/
+
+struct HashIndexCounters {
+    size_t indexOpen = 0;
+    size_t lookup = 0;
+    size_t candidates = 0;
+    size_t verification = 0;
+
+    size_t singleIndexOpen = 0;
+    size_t singleLookup = 0;
+    size_t singleCandidates = 0;
+    size_t singleVerification = 0;
+
+    void add(const MixedQueryResult& result) {
+        indexOpen += result.hashIndexOpenCount;
+        lookup += result.hashLookupCount;
+        candidates += result.hashCandidateCount;
+        verification += result.hashVerificationCount;
+
+        singleIndexOpen += result.hashSingleIndexOpenCount;
+        singleLookup += result.hashSingleLookupCount;
+        singleCandidates += result.hashSingleCandidateCount;
+        singleVerification += result.hashSingleVerificationCount;
+    }
+};
+
 
 std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
-    DBManager& dbManager, const std::map<std::string, BloomTree>& hierarchies,
-    const std::vector<std::string>& columns, size_t dbSize, int numQueriesPerScenario, const DistributionConfig& config,
-  const std::map<std::string, std::vector<std::string>>*
-    columnSstFiles) {
-  
-  std::vector<AccumulatedQueryMetrics> accumulatedResults;
-  
-  // Define the real data percentages to test
-  std::vector<double> realDataPercentages = {0.0, 10.0, 20.0, 40.0, 60.0, 80.0, 100.0};
-  
-  spdlog::info("runComprehensiveQueryAnalysis: Starting comprehensive analysis with {} queries per scenario", 
-               numQueriesPerScenario);
-  
-  for (double percentage : realDataPercentages) {
-    spdlog::info("Running scenario with {}% real data", percentage);
-    
-    // Run mixed queries for this percentage
-    std::vector<MixedQueryResult> results = runMixedQueriesWithCsvData(
-        dbManager, hierarchies, columns, dbSize, numQueriesPerScenario, percentage, config, columnSstFiles);
-    
-    if (results.empty()) {
-      spdlog::warn("No results returned for {}% real data scenario", percentage);
-      continue;
+    DBManager& dbManager,
+    const std::map<std::string, BloomTree>& hierarchies,
+    const std::vector<std::string>& columns,
+    size_t dbSize,
+    int numQueriesPerScenario,
+    const DistributionConfig& config,
+    const std::map<std::string, std::vector<std::string>>* columnSstFiles)
+{
+    std::vector<AccumulatedQueryMetrics> accumulatedResults;
+
+    const std::vector<double> realDataPercentages = {
+        0.0, 10.0, 20.0, 40.0, 60.0, 80.0, 100.0
+    };
+
+    spdlog::info(
+        "Starting comprehensive analysis with {} queries per scenario",
+        numQueriesPerScenario);
+
+    for (double percentage : realDataPercentages) {
+
+        spdlog::info("Running scenario with {}% real data", percentage);
+
+        // --------------------------------------------------
+        // 1. Execute queries
+        // --------------------------------------------------
+
+        std::vector<MixedQueryResult> results =
+            runMixedQueriesWithCsvData(
+                dbManager,
+                hierarchies,
+                columns,
+                dbSize,
+                numQueriesPerScenario,
+                percentage,
+                config,
+                columnSstFiles);
+
+        if (results.empty()) {
+            spdlog::warn(
+                "No results returned for {}% real data scenario",
+                percentage);
+            continue;
+        }
+
+        // --------------------------------------------------
+        // 2. Initialize metrics
+        // --------------------------------------------------
+
+        AccumulatedQueryMetrics metrics;
+
+        metrics.realDataPercentage = percentage;
+        metrics.totalQueries = results.size();
+        metrics.realQueries = 0;
+        metrics.falseQueries = 0;
+        metrics.numColumns = columns.size();
+
+        // --------------------------------------------------
+        // 3. Initialize time counters
+        // --------------------------------------------------
+
+        long long totalMultiTime = 0;
+        long long totalSingleTime = 0;
+        long long totalHashIndexTime = 0;
+        long long totalHashSingleIndexTime = 0;
+        long long totalHashSingleHierarchyIndexTime = 0;
+
+        long long realMultiTimeSum = 0;
+        long long realSingleTimeSum = 0;
+        long long realHashIndexTimeSum = 0;
+        long long realHashSingleIndexTimeSum = 0;
+        long long realHashSingleHierarchyIndexTimeSum = 0;
+
+        long long falseMultiTimeSum = 0;
+        long long falseSingleTimeSum = 0;
+        long long falseHashIndexTimeSum = 0;
+        long long falseHashSingleIndexTimeSum = 0;
+        long long falseHashSingleHierarchyIndexTimeSum = 0;
+
+        // --------------------------------------------------
+        // 4. Initialize BloomTree counters
+        // --------------------------------------------------
+
+        size_t totalMultiBloomChecks = 0;
+        size_t totalMultiLeafBloomChecks = 0;
+        size_t totalMultiSSTChecks = 0;
+        size_t totalMultiNonLeafBloomChecks = 0;
+
+        size_t totalSingleBloomChecks = 0;
+        size_t totalSingleLeafBloomChecks = 0;
+        size_t totalSingleSSTChecks = 0;
+        size_t totalSingleNonLeafBloomChecks = 0;
+
+        size_t realMultiBloomChecksSum = 0;
+        size_t realMultiSSTChecksSum = 0;
+
+        size_t falseMultiBloomChecksSum = 0;
+        size_t falseMultiSSTChecksSum = 0;
+
+        // --------------------------------------------------
+        // 5. Initialize Hash Index counters
+        // --------------------------------------------------
+
+        HashIndexCounters totalHash;
+        HashIndexCounters realHash;
+        HashIndexCounters falseHash;
+
+        // --------------------------------------------------
+        // 6. Process query results
+        // --------------------------------------------------
+
+        for (const auto& result : results) {
+
+            // Time measurements
+            totalMultiTime += result.hierarchicalMultiTime;
+            totalSingleTime += result.hierarchicalSingleTime;
+            totalHashIndexTime += result.hashIndexTime;
+            totalHashSingleIndexTime += result.hashSingleIndexTime;
+            totalHashSingleHierarchyIndexTime +=
+                result.hashSingleHierarchyIndexTime;
+
+            // BloomTree measurements
+            totalMultiBloomChecks += result.multiCol_bloomChecks;
+            totalMultiLeafBloomChecks += result.multiCol_leafBloomChecks;
+            totalMultiSSTChecks += result.multiCol_sstChecks;
+            totalMultiNonLeafBloomChecks += result.multiCol_nonLeafBloomChecks;
+
+            totalSingleBloomChecks += result.singleCol_bloomChecks;
+            totalSingleLeafBloomChecks += result.singleCol_leafBloomChecks;
+            totalSingleSSTChecks += result.singleCol_sstChecks;
+            totalSingleNonLeafBloomChecks += result.singleCol_nonLeafBloomChecks;
+
+            // Hash Index measurements
+            totalHash.add(result);
+
+            // Separate real and false data
+            if (result.isRealData) {
+
+                metrics.realQueries++;
+
+                realMultiTimeSum += result.hierarchicalMultiTime;
+                realSingleTimeSum += result.hierarchicalSingleTime;
+                realHashIndexTimeSum += result.hashIndexTime;
+                realHashSingleIndexTimeSum += result.hashSingleIndexTime;
+                realHashSingleHierarchyIndexTimeSum +=
+                    result.hashSingleHierarchyIndexTime;
+
+                realMultiBloomChecksSum += result.multiCol_bloomChecks;
+                realMultiSSTChecksSum += result.multiCol_sstChecks;
+
+                realHash.add(result);
+            }
+            else {
+
+                metrics.falseQueries++;
+
+                falseMultiTimeSum += result.hierarchicalMultiTime;
+                falseSingleTimeSum += result.hierarchicalSingleTime;
+                falseHashIndexTimeSum += result.hashIndexTime;
+                falseHashSingleIndexTimeSum += result.hashSingleIndexTime;
+                falseHashSingleHierarchyIndexTimeSum +=
+                    result.hashSingleHierarchyIndexTime;
+
+                falseMultiBloomChecksSum += result.multiCol_bloomChecks;
+                falseMultiSSTChecksSum += result.multiCol_sstChecks;
+
+                falseHash.add(result);
+            }
+        }
+
+        // --------------------------------------------------
+        // 7. Calculate averages for all queries
+        // --------------------------------------------------
+
+        const double queryCount = static_cast<double>(metrics.totalQueries);
+
+        metrics.avgHierarchicalMultiTime =
+            totalMultiTime / queryCount;
+
+        metrics.avgHierarchicalSingleTime =
+            totalSingleTime / queryCount;
+
+        metrics.avgHashIndexTime =
+            totalHashIndexTime / queryCount;
+
+        metrics.avgHashSingleIndexTime =
+            totalHashSingleIndexTime / queryCount;
+
+        metrics.avgHashSingleHierarchyIndexTime =
+            totalHashSingleHierarchyIndexTime / queryCount;
+
+        // BloomTree averages
+        metrics.avgMultiBloomChecks =
+            totalMultiBloomChecks / queryCount;
+
+        metrics.avgMultiLeafBloomChecks =
+            totalMultiLeafBloomChecks / queryCount;
+
+        metrics.avgMultiSSTChecks =
+            totalMultiSSTChecks / queryCount;
+
+        metrics.avgMultiNonLeafBloomChecks =
+            totalMultiNonLeafBloomChecks / queryCount;
+
+        metrics.avgSingleBloomChecks =
+            totalSingleBloomChecks / queryCount;
+
+        metrics.avgSingleLeafBloomChecks =
+            totalSingleLeafBloomChecks / queryCount;
+
+        metrics.avgSingleSSTChecks =
+            totalSingleSSTChecks / queryCount;
+
+        metrics.avgSingleNonLeafBloomChecks =
+            totalSingleNonLeafBloomChecks / queryCount;
+
+        // Hash Index averages
+        metrics.avgHashIndexOpenCount =
+            totalHash.indexOpen / queryCount;
+
+        metrics.avgHashLookupCount =
+            totalHash.lookup / queryCount;
+
+        metrics.avgHashCandidateCount =
+            totalHash.candidates / queryCount;
+
+        metrics.avgHashVerificationCount =
+            totalHash.verification / queryCount;
+
+        metrics.avgHashSingleIndexOpenCount =
+            totalHash.singleIndexOpen / queryCount;
+
+        metrics.avgHashSingleLookupCount =
+            totalHash.singleLookup / queryCount;
+
+        metrics.avgHashSingleCandidateCount =
+            totalHash.singleCandidates / queryCount;
+
+        metrics.avgHashSingleVerificationCount =
+            totalHash.singleVerification / queryCount;
+
+        // --------------------------------------------------
+        // 8. Calculate per-column averages
+        // --------------------------------------------------
+
+        const double numCols =
+            static_cast<double>(metrics.numColumns);
+
+        if (numCols > 0) {
+
+            metrics.avgMultiBloomChecksPerColumn =
+                metrics.avgMultiBloomChecks / numCols;
+
+            metrics.avgMultiLeafBloomChecksPerColumn =
+                metrics.avgMultiLeafBloomChecks / numCols;
+
+            metrics.avgMultiSSTChecksPerColumn =
+                metrics.avgMultiSSTChecks / numCols;
+
+            metrics.avgMultiNonLeafBloomChecksPerColumn =
+                metrics.avgMultiNonLeafBloomChecks / numCols;
+        }
+
+        // Single-column hierarchy already represents one column.
+        metrics.avgSingleBloomChecksPerColumn =
+            metrics.avgSingleBloomChecks;
+
+        metrics.avgSingleLeafBloomChecksPerColumn =
+            metrics.avgSingleLeafBloomChecks;
+
+        metrics.avgSingleSSTChecksPerColumn =
+            metrics.avgSingleSSTChecks;
+
+        metrics.avgSingleNonLeafBloomChecksPerColumn =
+            metrics.avgSingleNonLeafBloomChecks;
+
+        // --------------------------------------------------
+        // 9. Calculate averages for real data queries
+        // --------------------------------------------------
+
+        if (metrics.realQueries > 0) {
+
+            const double count =
+                static_cast<double>(metrics.realQueries);
+
+            metrics.avgRealDataMultiTime =
+                realMultiTimeSum / count;
+
+            metrics.avgRealDataSingleTime =
+                realSingleTimeSum / count;
+
+            metrics.avgRealHashIndexTime =
+                realHashIndexTimeSum / count;
+
+            metrics.avgRealHashSingleIndexTime =
+                realHashSingleIndexTimeSum / count;
+
+            metrics.avgRealHashSingleHierarchyIndexTime =
+                realHashSingleHierarchyIndexTimeSum / count;
+
+            metrics.avgRealMultiBloomChecks =
+                realMultiBloomChecksSum / count;
+
+            metrics.avgRealMultiSSTChecks =
+                realMultiSSTChecksSum / count;
+
+            metrics.avgRealMultiBloomChecksPerColumn =
+                numCols > 0 ? metrics.avgRealMultiBloomChecks / numCols : 0.0;
+
+            metrics.avgRealMultiSSTChecksPerColumn =
+                numCols > 0 ? metrics.avgRealMultiSSTChecks / numCols : 0.0;
+
+            // Hash Index - Multi-Column
+            metrics.avgRealHashIndexOpenCount =
+                realHash.indexOpen / count;
+
+            metrics.avgRealHashLookupCount =
+                realHash.lookup / count;
+
+            metrics.avgRealHashCandidateCount =
+                realHash.candidates / count;
+
+            metrics.avgRealHashVerificationCount =
+                realHash.verification / count;
+
+            // Hash Index - Single-Column
+            metrics.avgRealHashSingleIndexOpenCount =
+                realHash.singleIndexOpen / count;
+
+            metrics.avgRealHashSingleLookupCount =
+                realHash.singleLookup / count;
+
+            metrics.avgRealHashSingleCandidateCount =
+                realHash.singleCandidates / count;
+
+            metrics.avgRealHashSingleVerificationCount =
+                realHash.singleVerification / count;
+        }
+
+        // --------------------------------------------------
+        // 10. Calculate averages for false data queries
+        // --------------------------------------------------
+
+        if (metrics.falseQueries > 0) {
+
+            const double count =
+                static_cast<double>(metrics.falseQueries);
+
+            metrics.avgFalseDataMultiTime =
+                falseMultiTimeSum / count;
+
+            metrics.avgFalseDataSingleTime =
+                falseSingleTimeSum / count;
+
+            metrics.avgFalseHashIndexTime =
+                falseHashIndexTimeSum / count;
+
+            metrics.avgFalseHashSingleIndexTime =
+                falseHashSingleIndexTimeSum / count;
+
+            metrics.avgFalseHashSingleHierachyIndexTime =
+                falseHashSingleHierarchyIndexTimeSum / count;
+
+            metrics.avgFalseMultiBloomChecks =
+                falseMultiBloomChecksSum / count;
+
+            metrics.avgFalseMultiSSTChecks =
+                falseMultiSSTChecksSum / count;
+
+            metrics.avgFalseMultiBloomChecksPerColumn =
+                numCols > 0 ? metrics.avgFalseMultiBloomChecks / numCols : 0.0;
+
+            metrics.avgFalseMultiSSTChecksPerColumn =
+                numCols > 0 ? metrics.avgFalseMultiSSTChecks / numCols : 0.0;
+
+            // Hash Index - Multi-Column
+            metrics.avgFalseHashIndexOpenCount =
+                falseHash.indexOpen / count;
+
+            metrics.avgFalseHashLookupCount =
+                falseHash.lookup / count;
+
+            metrics.avgFalseHashCandidateCount =
+                falseHash.candidates / count;
+
+            metrics.avgFalseHashVerificationCount =
+                falseHash.verification / count;
+
+            // Hash Index - Single-Column
+            metrics.avgFalseHashSingleIndexOpenCount =
+                falseHash.singleIndexOpen / count;
+
+            metrics.avgFalseHashSingleLookupCount =
+                falseHash.singleLookup / count;
+
+            metrics.avgFalseHashSingleCandidateCount =
+                falseHash.singleCandidates / count;
+
+            metrics.avgFalseHashSingleVerificationCount =
+                falseHash.singleVerification / count;
+        }
+
+        // --------------------------------------------------
+        // 11. Store scenario results
+        // --------------------------------------------------
+
+        accumulatedResults.push_back(metrics);
+
+        spdlog::info(
+            "Scenario {}% complete: {} real queries (avg: {:.2f} us), "
+            "{} false queries (avg: {:.2f} us)",
+            percentage,
+            metrics.realQueries,
+            metrics.avgRealDataMultiTime,
+            metrics.falseQueries,
+            metrics.avgFalseDataMultiTime);
     }
-    
-    // Accumulate metrics
-    AccumulatedQueryMetrics metrics;
-    metrics.realDataPercentage = percentage;
-    metrics.totalQueries = results.size();
-    metrics.realQueries = 0;
-    metrics.falseQueries = 0;
-    metrics.numColumns = columns.size();
-    
-    // Initialize sums for averaging
-    long long totalMultiTime = 0, totalSingleTime = 0, totalHashIndexTime = 0, totalHashSingleIndexTime = 0, totalHashSingleHierarchyIndexTime = 0;
-    long long realMultiTimeSum = 0, realSingleTimeSum = 0, realHashIndexTimeSum = 0, realHashSingleIndexTimeSum = 0 , realHashSingleHierarchyIndexTimeSum = 0;
-    long long falseMultiTimeSum = 0, falseSingleTimeSum = 0, falseHashIndexTimeSum = 0, falseHashSingleIndexTimeSum = 0, falseHashSingleHierarchyIndexTimeSum = 0 ;
-    
-    size_t totalMultiBloomChecks = 0, totalMultiLeafBloomChecks = 0, totalMultiSSTChecks = 0;
-    size_t totalSingleBloomChecks = 0, totalSingleLeafBloomChecks = 0, totalSingleSSTChecks = 0;
-    size_t totalMultiNonLeafBloomChecks = 0, totalSingleNonLeafBloomChecks = 0;
-    
-    size_t realMultiBloomChecksSum = 0, realMultiSSTChecksSum = 0;
-    size_t falseMultiBloomChecksSum = 0, falseMultiSSTChecksSum = 0;
-    
-    // Process each query result
-    for (const auto& result : results) {
-      totalMultiTime += result.hierarchicalMultiTime;
-      totalSingleTime += result.hierarchicalSingleTime;
-      totalHashIndexTime += result.hashIndexTime;
-      totalHashSingleIndexTime += result.hashSingleIndexTime;
-      totalHashSingleHierarchyIndexTime += result.hashSingleHierarchyIndexTime;
 
-      totalMultiBloomChecks += result.multiCol_bloomChecks;
-      totalMultiLeafBloomChecks += result.multiCol_leafBloomChecks;
-      totalMultiSSTChecks += result.multiCol_sstChecks;
-      totalMultiNonLeafBloomChecks += result.multiCol_nonLeafBloomChecks;
-      totalSingleBloomChecks += result.singleCol_bloomChecks;
-      totalSingleLeafBloomChecks += result.singleCol_leafBloomChecks;
-      totalSingleSSTChecks += result.singleCol_sstChecks;
-      totalSingleNonLeafBloomChecks += result.singleCol_nonLeafBloomChecks;
-      
-      if (result.isRealData) {
-    metrics.realQueries++;
+    spdlog::info(
+        "Comprehensive analysis completed with {} scenarios",
+        accumulatedResults.size());
 
-    realMultiTimeSum += result.hierarchicalMultiTime;
-    realSingleTimeSum += result.hierarchicalSingleTime;
-    realHashIndexTimeSum += result.hashIndexTime;
-    realHashSingleIndexTimeSum += result.hashSingleIndexTime;
-    realHashSingleHierarchyIndexTimeSum +=
-        result.hashSingleHierarchyIndexTime;
-
-    realMultiBloomChecksSum += result.multiCol_bloomChecks;
-    realMultiSSTChecksSum += result.multiCol_sstChecks;
-} else {
-    metrics.falseQueries++;
-
-    falseMultiTimeSum += result.hierarchicalMultiTime;
-    falseSingleTimeSum += result.hierarchicalSingleTime;
-    falseHashIndexTimeSum += result.hashIndexTime;
-    falseHashSingleIndexTimeSum += result.hashSingleIndexTime;
-    falseHashSingleHierarchyIndexTimeSum +=
-        result.hashSingleHierarchyIndexTime;
-
-    falseMultiBloomChecksSum += result.multiCol_bloomChecks;
-    falseMultiSSTChecksSum += result.multiCol_sstChecks;
-}
-    }
-    
-    // Calculate averages
-    metrics.avgHierarchicalMultiTime = static_cast<double>(totalMultiTime) / metrics.totalQueries;
-    metrics.avgHierarchicalSingleTime = static_cast<double>(totalSingleTime) / metrics.totalQueries;
-    metrics.avgHashIndexTime =  static_cast<double>(totalHashIndexTime) / metrics.totalQueries;
-    metrics.avgHashSingleIndexTime =  static_cast<double>(totalHashSingleIndexTime) / metrics.totalQueries;
-    metrics.avgHashSingleHierarchyIndexTime =  static_cast<double>(totalHashSingleHierarchyIndexTime) / metrics.totalQueries;
-
-    metrics.avgMultiBloomChecks = static_cast<double>(totalMultiBloomChecks) / metrics.totalQueries;
-    metrics.avgMultiLeafBloomChecks = static_cast<double>(totalMultiLeafBloomChecks) / metrics.totalQueries;
-    metrics.avgMultiSSTChecks = static_cast<double>(totalMultiSSTChecks) / metrics.totalQueries;
-    metrics.avgMultiNonLeafBloomChecks = static_cast<double>(totalMultiNonLeafBloomChecks) / metrics.totalQueries;
-    metrics.avgSingleBloomChecks = static_cast<double>(totalSingleBloomChecks) / metrics.totalQueries;
-    metrics.avgSingleLeafBloomChecks = static_cast<double>(totalSingleLeafBloomChecks) / metrics.totalQueries;
-    metrics.avgSingleSSTChecks = static_cast<double>(totalSingleSSTChecks) / metrics.totalQueries;
-    metrics.avgSingleNonLeafBloomChecks = static_cast<double>(totalSingleNonLeafBloomChecks) / metrics.totalQueries;
-    
-    // Calculate per-column averages (dividing by column count)
-    double numCols = static_cast<double>(metrics.numColumns);
-    metrics.avgMultiBloomChecksPerColumn = metrics.avgMultiBloomChecks / numCols;
-    metrics.avgMultiLeafBloomChecksPerColumn = metrics.avgMultiLeafBloomChecks / numCols;
-    metrics.avgMultiSSTChecksPerColumn = metrics.avgMultiSSTChecks / numCols;
-    metrics.avgMultiNonLeafBloomChecksPerColumn = metrics.avgMultiNonLeafBloomChecks / numCols;
-    metrics.avgSingleBloomChecksPerColumn = metrics.avgSingleBloomChecks ;
-    metrics.avgSingleLeafBloomChecksPerColumn = metrics.avgSingleLeafBloomChecks ;
-    metrics.avgSingleSSTChecksPerColumn = metrics.avgSingleSSTChecks ;
-    metrics.avgSingleNonLeafBloomChecksPerColumn = metrics.avgSingleNonLeafBloomChecks ;
-    
-    // Calculate separate averages for real vs false data
-    if (metrics.realQueries > 0) {
-      metrics.avgRealDataMultiTime = static_cast<double>(realMultiTimeSum) / metrics.realQueries;
-      metrics.avgRealDataSingleTime = static_cast<double>(realSingleTimeSum) / metrics.realQueries;
-      metrics.avgRealHashIndexTime = static_cast<double>(realHashIndexTimeSum) / metrics.realQueries;
-      metrics.avgRealHashSingleIndexTime = static_cast<double>(realHashSingleIndexTimeSum) / metrics.realQueries;
-      metrics.avgRealHashSingleHierarchyIndexTime = static_cast<double>(realHashSingleHierarchyIndexTimeSum) / metrics.realQueries;
-      metrics.avgRealMultiBloomChecks = static_cast<double>(realMultiBloomChecksSum) / metrics.realQueries;
-      metrics.avgRealMultiSSTChecks = static_cast<double>(realMultiSSTChecksSum) / metrics.realQueries;
-      metrics.avgRealMultiBloomChecksPerColumn = metrics.avgRealMultiBloomChecks / numCols;
-      metrics.avgRealMultiSSTChecksPerColumn = metrics.avgRealMultiSSTChecks / numCols;
-    } else {
-        metrics.avgRealDataMultiTime = 0.0;
-        metrics.avgRealDataSingleTime = 0.0;
-        metrics.avgRealHashIndexTime = 0.0;
-        metrics.avgRealHashSingleIndexTime = 0.0;
-        metrics.avgRealHashSingleHierarchyIndexTime = 0.0;
-
-        metrics.avgRealMultiBloomChecks = 0.0;
-        metrics.avgRealMultiSSTChecks = 0.0;
-        metrics.avgRealMultiBloomChecksPerColumn = 0.0;
-        metrics.avgRealMultiSSTChecksPerColumn = 0.0;
-    }
-    
-    if (metrics.falseQueries > 0) {
-    metrics.avgFalseDataMultiTime =
-        static_cast<double>(falseMultiTimeSum) / metrics.falseQueries;
-
-    metrics.avgFalseDataSingleTime =
-        static_cast<double>(falseSingleTimeSum) / metrics.falseQueries;
-
-    metrics.avgFalseHashIndexTime =
-        static_cast<double>(falseHashIndexTimeSum) / metrics.falseQueries;
-
-    metrics.avgFalseHashSingleIndexTime =
-        static_cast<double>(falseHashSingleIndexTimeSum) / metrics.falseQueries;
-
-    metrics.avgFalseHashSingleHierachyIndexTime =
-        static_cast<double>(falseHashSingleHierarchyIndexTimeSum) / metrics.falseQueries;
-
-    metrics.avgFalseMultiBloomChecks =
-        static_cast<double>(falseMultiBloomChecksSum) / metrics.falseQueries;
-
-    metrics.avgFalseMultiSSTChecks =
-        static_cast<double>(falseMultiSSTChecksSum) / metrics.falseQueries;
-
-    metrics.avgFalseMultiBloomChecksPerColumn =
-        metrics.avgFalseMultiBloomChecks / numCols;
-
-    metrics.avgFalseMultiSSTChecksPerColumn =
-        metrics.avgFalseMultiSSTChecks / numCols;
-} else {
-    metrics.avgFalseDataMultiTime = 0.0;
-    metrics.avgFalseDataSingleTime = 0.0;
-    metrics.avgFalseHashIndexTime = 0.0;
-    metrics.avgFalseHashSingleIndexTime = 0.0;
-    metrics.avgFalseHashSingleHierachyIndexTime = 0.0;
-    metrics.avgFalseMultiBloomChecks = 0.0;
-    metrics.avgFalseMultiSSTChecks = 0.0;
-    metrics.avgFalseMultiBloomChecksPerColumn = 0.0;
-    metrics.avgFalseMultiSSTChecksPerColumn = 0.0;
-}
-    
-    accumulatedResults.push_back(metrics);
-    
-    spdlog::info("Scenario {}% complete: {} real queries (avg: {:.2f}μs), {} false queries (avg: {:.2f}μs)",
-                 percentage, metrics.realQueries, metrics.avgRealDataMultiTime, 
-                 metrics.falseQueries, metrics.avgFalseDataMultiTime);
-  }
-  
-  spdlog::info("Comprehensive analysis completed with {} scenarios", accumulatedResults.size());
-  return accumulatedResults;
+    return accumulatedResults;
 }

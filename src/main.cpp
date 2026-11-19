@@ -23,6 +23,10 @@
 #include "stopwatch.hpp"
 #include "test_params.hpp"
 
+#include "exp_utils.hpp"
+
+
+
 boost::asio::thread_pool globalThreadPool{std::thread::hardware_concurrency()};
 
 /*void clearBloomFilterFiles(const std::string& dbDir) {
@@ -80,8 +84,10 @@ int main(int argc, char* argv[]) {
     //runExp6(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp7(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp8(baseDir, initMode, skipDbScan);
-    runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    //runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     // runExpJ2(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    runNYCTaxiImport();
+
   } catch (const std::exception& e) {
     spdlog::error("[Error] {}", e.what());
     return EXIT_FAILURE;
