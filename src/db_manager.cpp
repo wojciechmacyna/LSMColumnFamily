@@ -932,6 +932,7 @@ if ((config.type == DataDistribution::Zipfian ||
 }
 
 
+
 void DBManager::importNYCTaxiCSV(
     const std::string& filename,
     size_t maxRecords,
@@ -959,7 +960,10 @@ void DBManager::importNYCTaxiCSV(
         "ratecode_id"
     };
 
-    // Verify that all required Column Families exist.
+    // --------------------------------------------------
+    // 1. Verify Column Families
+    // --------------------------------------------------
+
     std::map<std::string, rocksdb::ColumnFamilyHandle*> handles;
 
     for (const auto& column : columns) {
@@ -973,6 +977,10 @@ void DBManager::importNYCTaxiCSV(
         handles[column] = it->second.get();
     }
 
+    // --------------------------------------------------
+    // 2. Open CSV file
+    // --------------------------------------------------
+
     std::ifstream file(filename);
 
     if (!file.is_open()) {
@@ -980,7 +988,6 @@ void DBManager::importNYCTaxiCSV(
             "Cannot open CSV file: " + filename);
     }
 
-    // Read CSV header.
     std::string line;
 
     if (!std::getline(file, line)) {
@@ -995,6 +1002,10 @@ void DBManager::importNYCTaxiCSV(
         line.erase(0, 3);
     }
 
+    // --------------------------------------------------
+    // 3. Parse CSV header
+    // --------------------------------------------------
+
     std::vector<std::string> header;
 
     if (!parseCSVLine(line, header)) {
@@ -1002,38 +1013,54 @@ void DBManager::importNYCTaxiCSV(
             "Invalid CSV header.");
     }
 
-    // Map required attributes to CSV positions.
-    const std::map<std::string, std::string> csvColumnNames = {
-        {"pickup_location", "PULocationID"},
-        {"dropoff_location", "DOLocationID"},
-        {"payment_type", "payment_type"},
-        {"passenger_count", "passenger_count"},
-        {"vendor_id", "VendorID"},
-        {"ratecode_id", "RatecodeID"}
-    };
+    // Map Column Families to CSV columns.
+    // Location attributes consist of longitude and latitude.
 
-    std::map<std::string, size_t> positions;
+    const std::map<std::string, std::vector<std::string>>
+        csvColumnNames = {
+            {"pickup_location",
+             {"pickup_longitude", "pickup_latitude"}},
+
+            {"dropoff_location",
+             {"dropoff_longitude", "dropoff_latitude"}},
+
+            {"payment_type", {"payment_type"}},
+            {"passenger_count", {"passenger_count"}},
+            {"vendor_id", {"VendorID"}},
+            {"ratecode_id", {"RatecodeID"}}
+        };
+
+    // Resolve CSV column positions.
+
+    std::map<std::string, std::vector<size_t>> positions;
 
     for (const auto& column : columns) {
-        const std::string& csvName =
-            csvColumnNames.at(column);
 
-        auto it = std::find(
-            header.begin(), header.end(), csvName);
+        for (const auto& csvName : csvColumnNames.at(column)) {
 
-        if (it == header.end()) {
-            throw std::runtime_error(
-                "CSV column not found: " + csvName);
+            auto it = std::find(
+                header.begin(),
+                header.end(),
+                csvName);
+
+            if (it == header.end()) {
+                throw std::runtime_error(
+                    "CSV column not found: " + csvName);
+            }
+
+            positions[column].push_back(
+                static_cast<size_t>(
+                    std::distance(header.begin(), it)));
         }
-
-        positions[column] =
-            static_cast<size_t>(
-                std::distance(header.begin(), it));
     }
 
     spdlog::info(
         "Starting NYC Taxi CSV import: {}",
         filename);
+
+    // --------------------------------------------------
+    // 4. Import records
+    // --------------------------------------------------
 
     rocksdb::WriteBatch batch;
 
@@ -1060,14 +1087,25 @@ void DBManager::importNYCTaxiCSV(
             continue;
         }
 
+        // --------------------------------------------------
+        // 5. Validate required values
+        // --------------------------------------------------
+
         bool validRecord = true;
 
         for (const auto& column : columns) {
-            const size_t position = positions.at(column);
 
-            if (position >= fields.size() ||
-                fields[position].empty()) {
-                validRecord = false;
+            for (const size_t position : positions.at(column)) {
+
+                if (position >= fields.size() ||
+                    fields[position].empty()) {
+
+                    validRecord = false;
+                    break;
+                }
+            }
+
+            if (!validRecord) {
                 break;
             }
         }
@@ -1077,23 +1115,55 @@ void DBManager::importNYCTaxiCSV(
             continue;
         }
 
-        const std::string key =
-            makeRecordKey(recordIndex);
+        // --------------------------------------------------
+        // 6. Generate common key
+        // --------------------------------------------------
+
+        const std::string index =
+            std::to_string(recordIndex);
+
+        const std::string prefixedIndex =
+            std::string(20 - index.size(), '0') + index;
+
+        const std::string key = "key" + prefixedIndex;
+
+        // --------------------------------------------------
+        // 7. Insert values into Column Families
+        // --------------------------------------------------
 
         for (const auto& column : columns) {
+
+            std::string value;
+
+            for (const size_t position : positions.at(column)) {
+
+                if (!value.empty()) {
+                    value += ",";
+                }
+
+                value += fields[position];
+            }
+
             batch.Put(
                 handles.at(column),
                 key,
-                fields[positions.at(column)]);
+                value);
         }
 
         ++recordIndex;
         ++importedRecords;
         ++batchRecords;
 
+        // --------------------------------------------------
+        // 8. Write batch
+        // --------------------------------------------------
+
         if (batchRecords >= batchSize) {
+
             rocksdb::Status status =
-                db_->Write(rocksdb::WriteOptions(), &batch);
+                db_->Write(
+                    rocksdb::WriteOptions(),
+                    &batch);
 
             if (!status.ok()) {
                 throw std::runtime_error(
@@ -1106,10 +1176,16 @@ void DBManager::importNYCTaxiCSV(
         }
     }
 
-    // Write remaining records.
+    // --------------------------------------------------
+    // 9. Write remaining records
+    // --------------------------------------------------
+
     if (batchRecords > 0) {
+
         rocksdb::Status status =
-            db_->Write(rocksdb::WriteOptions(), &batch);
+            db_->Write(
+                rocksdb::WriteOptions(),
+                &batch);
 
         if (!status.ok()) {
             throw std::runtime_error(
@@ -1120,8 +1196,12 @@ void DBManager::importNYCTaxiCSV(
 
     file.close();
 
-    // Flush all imported Column Families.
+    // --------------------------------------------------
+    // 10. Flush Column Families
+    // --------------------------------------------------
+
     for (const auto& column : columns) {
+
         rocksdb::FlushOptions flushOptions;
         flushOptions.wait = true;
 
@@ -1133,9 +1213,14 @@ void DBManager::importNYCTaxiCSV(
         if (!status.ok()) {
             throw std::runtime_error(
                 "Flush failed for Column Family " +
-                column + ": " + status.ToString());
+                column + ": " +
+                status.ToString());
         }
     }
+
+    // --------------------------------------------------
+    // 11. Summary
+    // --------------------------------------------------
 
     sw.stop();
 
@@ -1149,6 +1234,7 @@ void DBManager::importNYCTaxiCSV(
         batchSize,
         sw.elapsedMicros());
 }
+
 
 
 
@@ -1894,7 +1980,7 @@ spdlog::info(
     allKeys.size(),
     matchingKeys.size(),
     sw.elapsedMicros());
-    
+
 return matchingKeys;
 }
 
