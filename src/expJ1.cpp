@@ -7,8 +7,12 @@
 #include "db_manager.hpp"
 #include "expJ1.hpp"
 #include "exp1.hpp"
-#include "exp_utils.hpp"
 #include "bloom_manager.hpp"
+
+#include "experiment_initialization.hpp"
+#include "comprehensive_query_analysis.hpp"
+#include "csv_utils.hpp"
+
 
 
 // Runs the J1 experiment for a specific data distribution configuration

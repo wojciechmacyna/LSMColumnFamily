@@ -43,20 +43,33 @@ SRC = \
     src/bloom_manager.cpp \
     src/main.cpp \
     src/exp1.cpp \
-    src/exp5.cpp \
-    src/exp6.cpp \
-    src/exp7.cpp \
-    src/exp8.cpp \
     src/expJ1.cpp \
     src/expJ2.cpp \
     src/expJ_real_data.cpp\
-    src/exp_utils.cpp \
+    src/query_execution.cpp \
+    src/query_generation.cpp \
+    src/experiment_runner.cpp \
+    src/result_aggregation.cpp \
+    src/real_data_experiment.cpp \
+    src/sst_bloom_infrastructure.cpp \
+    src/pattern_query_experiment.cpp \
+    src/experiment_initialization.cpp \
+    src/nyc_taxi_import.cpp \
+    src/comprehensive_query_analysis.cpp \
     bloom/bloom_tree.cpp \
     bloom/bloom_filter.cpp \
     bloom/node.cpp \
     bloom/MurmurHash3.cpp \
     src/sst_hash_index.cpp \
-    src/real_data.cpp
+    src/real_data.cpp \
+    src/csv_utils.cpp
+
+
+ #   src/exp5.cpp \
+     src/exp6.cpp \
+    src/exp7.cpp \
+    src/exp8.cpp \
+
 
 # Convert source files to object files
 OBJ_DIR = obj

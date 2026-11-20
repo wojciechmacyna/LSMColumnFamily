@@ -16,7 +16,7 @@
 #include "bloom_tree.hpp"
 #include "bloom_manager.hpp"
 #include "db_manager.hpp"
-#include "exp_utils.hpp"
+
 #include "stopwatch.hpp"
 
 extern void clearBloomFilterFiles(const std::string& dbDir);
