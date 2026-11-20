@@ -1729,71 +1729,151 @@ std::vector<MixedQueryResult> runMixedQueriesWithRealData(
     RealDataQueryContext& realDataContext,
     int numQueries,
     double positiveQueryPercentage,
-    const std::map<std::string, std::vector<std::string>>* columnSstFiles)
+    const std::map<std::string, std::vector<std::string>>*
+        columnSstFiles)
 {
-    std::vector<MixedQueryResult> results;
+    if (numQueries <= 0) {
+        throw std::invalid_argument(
+            "Number of queries must be greater than zero.");
+    }
 
-    if (numQueries <= 0 || columns.empty() ||
-        realDataContext.positiveRecords.empty()) {
-        spdlog::warn(
-            "runMixedQueriesWithRealData: Invalid experiment parameters.");
-        return results;
+    if (columns.empty()) {
+        throw std::invalid_argument(
+            "Column list cannot be empty.");
     }
 
     if (positiveQueryPercentage < 0.0 ||
         positiveQueryPercentage > 100.0) {
         throw std::invalid_argument(
-            "positiveQueryPercentage must be between 0 and 100");
+            "Positive query percentage must be between 0 and 100.");
     }
 
+    if (positiveQueryPercentage > 0.0 &&
+        realDataContext.positiveRecords.empty()) {
+        throw std::invalid_argument(
+            "No positive records available for query generation.");
+    }
+
+    // Prepare query trees.
     auto queryTrees = prepareQueryTrees(hierarchies, columns);
 
     if (queryTrees.empty()) {
-        return results;
+        throw std::runtime_error(
+            "Failed to prepare query trees.");
     }
 
+    std::vector<MixedQueryResult> results;
     results.reserve(numQueries);
 
-    std::bernoulli_distribution positiveDistribution(
-        positiveQueryPercentage / 100.0);
+    // ---------------------------------------------------------
+    // 1. Determine the exact number of positive and negative
+    //    queries.
+    // ---------------------------------------------------------
+
+    const size_t positiveQueries = static_cast<size_t>(
+        std::llround(
+            numQueries * positiveQueryPercentage / 100.0));
+
+    const size_t negativeQueries =
+        static_cast<size_t>(numQueries) - positiveQueries;
+
+    // ---------------------------------------------------------
+    // 2. Prepare query schedule.
+    // ---------------------------------------------------------
+
+    std::vector<bool> querySchedule;
+    querySchedule.reserve(numQueries);
+
+    querySchedule.insert(
+        querySchedule.end(),
+        positiveQueries,
+        true);
+
+    querySchedule.insert(
+        querySchedule.end(),
+        negativeQueries,
+        false);
+
+    // Shuffle query types to avoid executing all positive
+    // queries before all negative queries.
+    std::mt19937_64 scheduleRng(12345);
+
+    std::shuffle(
+        querySchedule.begin(),
+        querySchedule.end(),
+        scheduleRng);
+
+    spdlog::info(
+        "RealDataExperiment: Starting {} queries "
+        "({} positive, {} negative, {:.1f}% positive).",
+        numQueries,
+        positiveQueries,
+        negativeQueries,
+        positiveQueryPercentage);
+
+    // ---------------------------------------------------------
+    // 3. Generate and execute queries.
+    // ---------------------------------------------------------
+
+    size_t generatedPositiveQueries = 0;
+    size_t generatedNegativeQueries = 0;
 
     for (int queryIdx = 0; queryIdx < numQueries; ++queryIdx) {
 
         GeneratedRealDataQuery query;
-        bool generated = false;
 
-        const bool generatePositive =
-            positiveDistribution(realDataContext.queryRng);
+        const bool generatePositive = querySchedule[queryIdx];
+
+        // -----------------------------------------------------
+        // Generate positive or negative query.
+        // -----------------------------------------------------
 
         if (generatePositive) {
-            query = generatePositiveRealDataQuery(realDataContext);
-            generated = true;
+
+            query = generatePositiveRealDataQuery(
+                realDataContext);
+
+            ++generatedPositiveQueries;
+
         } else {
-            // Rotate through 1, 2 and 3 modified columns.
+
             const size_t changedColumns =
-                static_cast<size_t>(queryIdx % 3) + 1;
+                static_cast<size_t>(queryIdx % 3 + 1);
 
-            generated = generateNegativeRealDataQuery(
-                dbManager,
-                columns,
-                realDataContext,
-                query,
-                changedColumns,
-                100);
+            const bool generated =
+                generateNegativeRealDataQuery(
+                    dbManager,
+                    columns,
+                    realDataContext,
+                    query,
+                    changedColumns,
+                    100);
+
+            if (!generated) {
+                spdlog::warn(
+                    "RealDataExperiment: Could not generate "
+                    "negative query {}. Skipping.",
+                    queryIdx);
+
+                continue;
+            }
+
+            ++generatedNegativeQueries;
         }
 
-        if (!generated) {
-            spdlog::warn(
-                "runMixedQueriesWithRealData: Could not generate query {}. "
-                "Skipping.",
-                queryIdx);
-            continue;
-        }
+        // -----------------------------------------------------
+        // Initialize query result.
+        // -----------------------------------------------------
 
-        MixedQueryResult result;
+        MixedQueryResult result{};
+
         result.queryIndex = queryIdx;
         result.isRealData = query.isPositive;
         result.matchingColumns = query.matchingColumns;
+
+        // -----------------------------------------------------
+        // 4. Hash Index Scan - all SST indexes.
+        // -----------------------------------------------------
 
         runHashIndexQueries(
             dbManager,
@@ -1802,12 +1882,20 @@ std::vector<MixedQueryResult> runMixedQueriesWithRealData(
             columnSstFiles,
             result);
 
+        // -----------------------------------------------------
+        // 5. Hash Index + BloomTree - single hierarchy.
+        // -----------------------------------------------------
+
         runHashSingleHierarchyQuery(
             dbManager,
             queryTrees[0],
             columns,
             query.values,
             result);
+
+        // -----------------------------------------------------
+        // 6. Hierarchical BloomTree queries.
+        // -----------------------------------------------------
 
         runHierarchicalQueries(
             dbManager,
@@ -1816,13 +1904,30 @@ std::vector<MixedQueryResult> runMixedQueriesWithRealData(
             query.values,
             result);
 
+        // -----------------------------------------------------
+        // Store results.
+        // -----------------------------------------------------
+
         results.push_back(std::move(result));
+
+        if ((queryIdx + 1) % 100 == 0) {
+            spdlog::info(
+                "RealDataExperiment: processed {} / {} queries",
+                queryIdx + 1,
+                numQueries);
+        }
     }
 
+    // ---------------------------------------------------------
+    // 7. Summary.
+    // ---------------------------------------------------------
+
     spdlog::info(
-        "runMixedQueriesWithRealData: Generated {} out of {} queries.",
-        results.size(),
-        numQueries);
+        "RealDataExperiment: Finished. "
+        "Generated positive: {}, negative: {}, total: {}.",
+        generatedPositiveQueries,
+        generatedNegativeQueries,
+        results.size());
 
     return results;
 }
@@ -1946,59 +2051,54 @@ void runRealDataExperiment(
     // 6. Execute queries
     // -------------------------------------------------
 
-    constexpr double positiveQueryPercentage = 50.0;
+    const std::vector<double> positiveQueryRatios = {
+    10.0,
+    25.0,
+    50.0,
+    75.0,
+    90.0
+    };
 
-    stopwatch.start();
 
-    auto results =
-        runMixedQueriesWithRealData(
-            dbManager,
-            hierarchies,
-            columns,
-            realDataContext,
-            numQueries,
-            positiveQueryPercentage,
-            &columnSstFiles);
+    for (double positiveRatio : positiveQueryRatios) {
 
-    stopwatch.stop();
+    spdlog::info(
+        "==============================================");
 
-    const auto queryExecutionTime = stopwatch.elapsedMicros();
+    spdlog::info(
+        "Starting NYC Taxi experiment: {:.0f}% positive queries",
+        positiveRatio);
+
+    spdlog::info(
+        "==============================================");
+
+    // Kopia kontekstu zapewnia taki sam stan generatora
+    // na początku każdej konfiguracji.
+    auto experimentContext = realDataContext;
+
+    auto results = runMixedQueriesWithRealData(
+        dbManager,
+        hierarchies,
+        columns,
+        experimentContext,
+        numQueries,
+        positiveRatio,
+        &columnSstFiles);
 
     auto aggregatedResults =
-    aggregateMixedQueryResults(results);
-    
+        aggregateMixedQueryResults(results);
+
     saveRealDataExperimentResults(
-    "csv/real_data_comparison.csv",
-    aggregatedResults,
-    realDataContext.recordsScanned);
+        "csv/real_data_comparison.csv",
+        aggregatedResults,
+        experimentContext.recordsScanned);
+}
 
-    spdlog::info(
-        "RealData: Query execution={} us, generated queries={}",
-        queryExecutionTime,
-        results.size());
 
-    // -------------------------------------------------
-    // 7. Summary
-    // -------------------------------------------------
-
-    size_t positiveCount = 0;
-    size_t negativeCount = 0;
-
-    for (const auto& result : results) {
-        if (result.isRealData) {
-            ++positiveCount;
-        } else {
-            ++negativeCount;
-        }
-    }
-
-    spdlog::info(
-        "RealData summary: positive={}, negative={}, total={}",
-        positiveCount,
-        negativeCount,
-        results.size());
-
-    // CSV aggregation will be added in the next step.
+   spdlog::info(
+    "NYC Taxi real-data experiment completed. "
+    "Configurations tested: {}.",
+    positiveQueryRatios.size());
 }
 
 
