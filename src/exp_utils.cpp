@@ -1544,6 +1544,7 @@ void runHashIndexQueries(
         timings.totalTime);
 }
 
+
 void runHierarchicalQueries(
     DBManager& dbManager,
     std::vector<BloomTree>& queryTrees,
@@ -1553,7 +1554,17 @@ void runHierarchicalQueries(
 {
     StopWatch stopwatch;
 
+    if (columns.empty() || queryTrees.empty()) {
+        throw std::invalid_argument(
+            "Columns and queryTrees must not be empty.");
+    }
+
+    const double numCols = static_cast<double>(columns.size());
+
+    // ---------------------------------------------------------
     // Hierarchical Multi-Column Query
+    // ---------------------------------------------------------
+
     gBloomCheckCount = 0;
     gLeafBloomCheckCount = 0;
     gSSTCheckCount = 0;
@@ -1581,21 +1592,22 @@ void runHierarchicalQueries(
         result.multiCol_bloomChecks -
         result.multiCol_leafBloomChecks;
 
-    const double numCols = static_cast<double>(columns.size());
-
     result.multiCol_bloomChecksPerColumn =
-        result.multiCol_bloomChecks / numCols;
+        static_cast<double>(result.multiCol_bloomChecks) / numCols;
 
     result.multiCol_leafBloomChecksPerColumn =
-        result.multiCol_leafBloomChecks / numCols;
+        static_cast<double>(result.multiCol_leafBloomChecks) / numCols;
 
     result.multiCol_sstChecksPerColumn =
-        result.multiCol_sstChecks / numCols;
+        static_cast<double>(result.multiCol_sstChecks) / numCols;
 
     result.multiCol_nonLeafBloomChecksPerColumn =
-        result.multiCol_nonLeafBloomChecks / numCols;
+        static_cast<double>(result.multiCol_nonLeafBloomChecks) / numCols;
 
+    // ---------------------------------------------------------
     // Hierarchical Single-Column Query
+    // ---------------------------------------------------------
+
     gBloomCheckCount = 0;
     gLeafBloomCheckCount = 0;
     gSSTCheckCount = 0;
@@ -1620,6 +1632,7 @@ void runHierarchicalQueries(
         result.singleCol_bloomChecks -
         result.singleCol_leafBloomChecks;
 
+    // Single hierarchy: counts for one column.
     result.singleCol_bloomChecksPerColumn =
         static_cast<double>(result.singleCol_bloomChecks);
 
@@ -1633,434 +1646,6 @@ void runHierarchicalQueries(
         static_cast<double>(result.singleCol_nonLeafBloomChecks);
 }
 
-
-
-std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
-    DBManager& dbManager,
-    const std::map<std::string, BloomTree>& hierarchies,
-    const std::vector<std::string>& columns,
-    size_t dbSize,
-    int numQueries,
-    double realDataPercentage,
-    const DistributionConfig& config,
-    const std::map<std::string, std::vector<std::string>>* columnSstFiles)
-{
-    std::vector<MixedQueryResult> results;
-
-    if (numQueries <= 0 || columns.empty() || dbSize == 0) {
-        spdlog::warn(
-            "runMixedQueriesWithCsvData: Invalid experiment parameters.");
-        return results;
-    }
-
-    // Prepare query trees.
-    auto queryTrees = prepareQueryTrees(hierarchies, columns);
-
-    if (queryTrees.empty()) {
-        return results;
-    }
-
-    // Initialize query generation.
-    auto generationContext = createQueryGenerationContext(
-        columns.size(),
-        dbSize,
-        numQueries,
-        realDataPercentage,
-        config);
-
-    if (generationContext.patterns.size() < 2) {
-        spdlog::error(
-            "runMixedQueriesWithCsvData: At least two query patterns are required.");
-        return results;
-    }
-
-    results.reserve(numQueries);
-
-    // Execute queries.
-    for (int queryIdx = 0; queryIdx < numQueries; ++queryIdx) {
-
-        // Generate query.
-        GeneratedQuery query = generateMixedQuery(
-            queryIdx,
-            columns,
-            generationContext,
-            config);
-
-        MixedQueryResult result;
-        result.queryIndex = queryIdx;
-        result.isRealData = query.isRealData;
-
-        // Execute search strategies.
-        runHashIndexQueries(
-            dbManager,
-            columns,
-            query.values,
-            columnSstFiles,
-            result);
-
-        runHashSingleHierarchyQuery(
-            dbManager,
-            queryTrees[0],
-            columns,
-            query.values,
-            result);
-
-        runHierarchicalQueries(
-            dbManager,
-            queryTrees,
-            columns,
-            query.values,
-            result);
-
-        results.push_back(std::move(result));
-
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(10));
-    }
-
-    return results;
-}
-
-
-std::vector<MixedQueryResult> runMixedQueriesWithRealData(
-    DBManager& dbManager,
-    const std::map<std::string, BloomTree>& hierarchies,
-    const std::vector<std::string>& columns,
-    RealDataQueryContext& realDataContext,
-    int numQueries,
-    double positiveQueryPercentage,
-    const std::map<std::string, std::vector<std::string>>*
-        columnSstFiles)
-{
-    if (numQueries <= 0) {
-        throw std::invalid_argument(
-            "Number of queries must be greater than zero.");
-    }
-
-    if (columns.empty()) {
-        throw std::invalid_argument(
-            "Column list cannot be empty.");
-    }
-
-    if (positiveQueryPercentage < 0.0 ||
-        positiveQueryPercentage > 100.0) {
-        throw std::invalid_argument(
-            "Positive query percentage must be between 0 and 100.");
-    }
-
-    if (positiveQueryPercentage > 0.0 &&
-        realDataContext.positiveRecords.empty()) {
-        throw std::invalid_argument(
-            "No positive records available for query generation.");
-    }
-
-    // Prepare query trees.
-    auto queryTrees = prepareQueryTrees(hierarchies, columns);
-
-    if (queryTrees.empty()) {
-        throw std::runtime_error(
-            "Failed to prepare query trees.");
-    }
-
-    std::vector<MixedQueryResult> results;
-    results.reserve(numQueries);
-
-    // ---------------------------------------------------------
-    // 1. Determine the exact number of positive and negative
-    //    queries.
-    // ---------------------------------------------------------
-
-    const size_t positiveQueries = static_cast<size_t>(
-        std::llround(
-            numQueries * positiveQueryPercentage / 100.0));
-
-    const size_t negativeQueries =
-        static_cast<size_t>(numQueries) - positiveQueries;
-
-    // ---------------------------------------------------------
-    // 2. Prepare query schedule.
-    // ---------------------------------------------------------
-
-    std::vector<bool> querySchedule;
-    querySchedule.reserve(numQueries);
-
-    querySchedule.insert(
-        querySchedule.end(),
-        positiveQueries,
-        true);
-
-    querySchedule.insert(
-        querySchedule.end(),
-        negativeQueries,
-        false);
-
-    // Shuffle query types to avoid executing all positive
-    // queries before all negative queries.
-    std::mt19937_64 scheduleRng(12345);
-
-    std::shuffle(
-        querySchedule.begin(),
-        querySchedule.end(),
-        scheduleRng);
-
-    spdlog::info(
-        "RealDataExperiment: Starting {} queries "
-        "({} positive, {} negative, {:.1f}% positive).",
-        numQueries,
-        positiveQueries,
-        negativeQueries,
-        positiveQueryPercentage);
-
-    // ---------------------------------------------------------
-    // 3. Generate and execute queries.
-    // ---------------------------------------------------------
-
-    size_t generatedPositiveQueries = 0;
-    size_t generatedNegativeQueries = 0;
-
-    for (int queryIdx = 0; queryIdx < numQueries; ++queryIdx) {
-
-        GeneratedRealDataQuery query;
-
-        const bool generatePositive = querySchedule[queryIdx];
-
-        // -----------------------------------------------------
-        // Generate positive or negative query.
-        // -----------------------------------------------------
-
-        if (generatePositive) {
-
-            query = generatePositiveRealDataQuery(
-                realDataContext);
-
-            ++generatedPositiveQueries;
-
-        } else {
-
-            const size_t changedColumns =
-                static_cast<size_t>(queryIdx % 3 + 1);
-
-            const bool generated =
-                generateNegativeRealDataQuery(
-                    dbManager,
-                    columns,
-                    realDataContext,
-                    query,
-                    changedColumns,
-                    100);
-
-            if (!generated) {
-                spdlog::warn(
-                    "RealDataExperiment: Could not generate "
-                    "negative query {}. Skipping.",
-                    queryIdx);
-
-                continue;
-            }
-
-            ++generatedNegativeQueries;
-        }
-
-        // -----------------------------------------------------
-        // Initialize query result.
-        // -----------------------------------------------------
-
-        MixedQueryResult result{};
-
-        result.queryIndex = queryIdx;
-        result.isRealData = query.isPositive;
-        result.matchingColumns = query.matchingColumns;
-
-        // -----------------------------------------------------
-        // 4. Hash Index Scan - all SST indexes.
-        // -----------------------------------------------------
-
-        runHashIndexQueries(
-            dbManager,
-            columns,
-            query.values,
-            columnSstFiles,
-            result);
-
-        // -----------------------------------------------------
-        // 5. Hash Index + BloomTree - single hierarchy.
-        // -----------------------------------------------------
-
-        runHashSingleHierarchyQuery(
-            dbManager,
-            queryTrees[0],
-            columns,
-            query.values,
-            result);
-
-        // -----------------------------------------------------
-        // 6. Hierarchical BloomTree queries.
-        // -----------------------------------------------------
-
-        runHierarchicalQueries(
-            dbManager,
-            queryTrees,
-            columns,
-            query.values,
-            result);
-
-        // -----------------------------------------------------
-        // Store results.
-        // -----------------------------------------------------
-
-        results.push_back(std::move(result));
-
-        if ((queryIdx + 1) % 100 == 0) {
-            spdlog::info(
-                "RealDataExperiment: processed {} / {} queries",
-                queryIdx + 1,
-                numQueries);
-        }
-    }
-
-    // ---------------------------------------------------------
-    // 7. Summary.
-    // ---------------------------------------------------------
-
-    spdlog::info(
-        "RealDataExperiment: Finished. "
-        "Generated positive: {}, negative: {}, total: {}.",
-        generatedPositiveQueries,
-        generatedNegativeQueries,
-        results.size());
-
-    return results;
-}
-
-
-void saveRealDataStructureStats(
-    const std::string& filename,
-    const std::map<std::string, std::vector<std::string>>& columnSstFiles,
-    const std::map<std::string, BloomTree>& hierarchies,
-    uint64_t hashIndexSizeBytes)
-{
-    namespace fs = std::filesystem;
-
-    const fs::path outputPath(filename);
-
-    if (!outputPath.parent_path().empty()) {
-        fs::create_directories(outputPath.parent_path());
-    }
-
-    const bool writeHeader =
-        !fs::exists(outputPath) || fs::file_size(outputPath) == 0;
-
-    std::ofstream file(filename, std::ios::app);
-
-    if (!file.is_open()) {
-        throw std::runtime_error(
-            "Cannot open real-data structure statistics file: " +
-            filename);
-    }
-
-    if (writeHeader) {
-        file
-            << "column,"
-            << "sstFiles,"
-            << "bloomLeaves,"
-            << "bloomNodes,"
-            << "bloomInternalNodes,"
-            << "bloomMemoryBytes,"
-            << "bloomDiskBytes,"
-            << "hashIndexCount,"
-            << "hashIndexSizeBytes\n";
-    }
-
-    // Total statistics.
-    size_t totalSstFiles = 0;
-    size_t totalBloomLeaves = 0;
-    size_t totalBloomNodes = 0;
-    size_t totalBloomInternalNodes = 0;
-    uint64_t totalBloomMemoryBytes = 0;
-    uint64_t totalBloomDiskBytes = 0;
-    size_t totalHashIndexes = 0;
-
-    // Statistics for individual column families.
-    for (const auto& [column, sstFiles] : columnSstFiles) {
-
-        auto hierarchyIt = hierarchies.find(column);
-
-        if (hierarchyIt == hierarchies.end()) {
-            spdlog::warn(
-                "No BloomTree hierarchy found for column '{}'",
-                column);
-            continue;
-        }
-
-        const auto& tree = hierarchyIt->second;
-
-        const size_t sstCount = sstFiles.size();
-        const size_t leaves = tree.leafCount();
-        const size_t nodes = tree.nodeCount();
-
-        const size_t internalNodes =
-            nodes >= leaves ? nodes - leaves : 0;
-
-        const uint64_t memoryBytes = tree.memorySize();
-        const uint64_t diskBytes = tree.diskSize();
-
-        // One Hash Index per SST file.
-        const size_t hashIndexCount = sstCount;
-
-        file
-            << column << ','
-            << sstCount << ','
-            << leaves << ','
-            << nodes << ','
-            << internalNodes << ','
-            << memoryBytes << ','
-            << diskBytes << ','
-            << hashIndexCount << ",\n";
-
-        totalSstFiles += sstCount;
-        totalBloomLeaves += leaves;
-        totalBloomNodes += nodes;
-        totalBloomInternalNodes += internalNodes;
-        totalBloomMemoryBytes += memoryBytes;
-        totalBloomDiskBytes += diskBytes;
-        totalHashIndexes += hashIndexCount;
-
-        spdlog::info(
-            "StructureStats [{}]: SST={}, BloomLeaves={}, "
-            "BloomNodes={}, InternalNodes={}, Memory={} bytes, "
-            "Disk={} bytes",
-            column,
-            sstCount,
-            leaves,
-            nodes,
-            internalNodes,
-            memoryBytes,
-            diskBytes);
-    }
-
-    // Total statistics across all column families.
-    file
-        << "TOTAL,"
-        << totalSstFiles << ','
-        << totalBloomLeaves << ','
-        << totalBloomNodes << ','
-        << totalBloomInternalNodes << ','
-        << totalBloomMemoryBytes << ','
-        << totalBloomDiskBytes << ','
-        << totalHashIndexes << ','
-        << hashIndexSizeBytes << '\n';
-
-    file.close();
-
-    spdlog::info(
-        "Total structure: SST={}, BloomLeaves={}, BloomNodes={}, "
-        "HashIndexes={}, HashIndexSize={} bytes",
-        totalSstFiles,
-        totalBloomLeaves,
-        totalBloomNodes,
-        totalHashIndexes,
-        hashIndexSizeBytes);
-}
 
 
 void runRealDataExperiment(
@@ -2177,16 +1762,6 @@ void runRealDataExperiment(
     spdlog::info(
         "RealData: Query context preparation={} us",
         contextBuildTime);
-
-      // -------------------------------------------------
-      // 5. Save database structure statistics
-      // -------------------------------------------------
-
-    saveRealDataStructureStats(
-          "csv/real_data_structure_stats.csv",
-          columnSstFiles,
-          hierarchies,
-          hashIndexSize);
 
     // -------------------------------------------------
     // 6. Execute queries
@@ -2885,4 +2460,302 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
         accumulatedResults.size());
 
     return accumulatedResults;
+}
+
+
+std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
+    DBManager& dbManager,
+    const std::map<std::string, BloomTree>& hierarchies,
+    const std::vector<std::string>& columns,
+    size_t dbSize,
+    int numQueries,
+    double realDataPercentage,
+    const DistributionConfig& config,
+    const std::map<std::string, std::vector<std::string>>* columnSstFiles)
+{
+    std::vector<MixedQueryResult> results;
+
+    if (numQueries <= 0 || columns.empty() || dbSize == 0) {
+        spdlog::warn(
+            "runMixedQueriesWithCsvData: Invalid experiment parameters.");
+        return results;
+    }
+
+    // Prepare query trees.
+    auto queryTrees = prepareQueryTrees(hierarchies, columns);
+
+    if (queryTrees.empty()) {
+        return results;
+    }
+
+    // Initialize query generation.
+    auto generationContext = createQueryGenerationContext(
+        columns.size(),
+        dbSize,
+        numQueries,
+        realDataPercentage,
+        config);
+
+    if (generationContext.patterns.size() < 2) {
+        spdlog::error(
+            "runMixedQueriesWithCsvData: At least two query patterns are required.");
+        return results;
+    }
+
+    results.reserve(numQueries);
+
+    // Execute queries.
+    for (int queryIdx = 0; queryIdx < numQueries; ++queryIdx) {
+
+        // Generate query.
+        GeneratedQuery query = generateMixedQuery(
+            queryIdx,
+            columns,
+            generationContext,
+            config);
+
+        MixedQueryResult result;
+        result.queryIndex = queryIdx;
+        result.isRealData = query.isRealData;
+
+        // Execute search strategies.
+        runHashIndexQueries(
+            dbManager,
+            columns,
+            query.values,
+            columnSstFiles,
+            result);
+
+        runHashSingleHierarchyQuery(
+            dbManager,
+            queryTrees[0],
+            columns,
+            query.values,
+            result);
+
+        runHierarchicalQueries(
+            dbManager,
+            queryTrees,
+            columns,
+            query.values,
+            result);
+
+        results.push_back(std::move(result));
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(10));
+    }
+
+    return results;
+}
+
+
+std::vector<MixedQueryResult> runMixedQueriesWithRealData(
+    DBManager& dbManager,
+    const std::map<std::string, BloomTree>& hierarchies,
+    const std::vector<std::string>& columns,
+    RealDataQueryContext& realDataContext,
+    int numQueries,
+    double positiveQueryPercentage,
+    const std::map<std::string, std::vector<std::string>>*
+        columnSstFiles)
+{
+    if (numQueries <= 0) {
+        throw std::invalid_argument(
+            "Number of queries must be greater than zero.");
+    }
+
+    if (columns.empty()) {
+        throw std::invalid_argument(
+            "Column list cannot be empty.");
+    }
+
+    if (positiveQueryPercentage < 0.0 ||
+        positiveQueryPercentage > 100.0) {
+        throw std::invalid_argument(
+            "Positive query percentage must be between 0 and 100.");
+    }
+
+    if (positiveQueryPercentage > 0.0 &&
+        realDataContext.positiveRecords.empty()) {
+        throw std::invalid_argument(
+            "No positive records available for query generation.");
+    }
+
+    // Prepare query trees.
+    auto queryTrees = prepareQueryTrees(hierarchies, columns);
+
+    if (queryTrees.empty()) {
+        throw std::runtime_error(
+            "Failed to prepare query trees.");
+    }
+
+    std::vector<MixedQueryResult> results;
+    results.reserve(numQueries);
+
+    // ---------------------------------------------------------
+    // 1. Determine the exact number of positive and negative
+    //    queries.
+    // ---------------------------------------------------------
+
+    const size_t positiveQueries = static_cast<size_t>(
+        std::llround(
+            numQueries * positiveQueryPercentage / 100.0));
+
+    const size_t negativeQueries =
+        static_cast<size_t>(numQueries) - positiveQueries;
+
+    // ---------------------------------------------------------
+    // 2. Prepare query schedule.
+    // ---------------------------------------------------------
+
+    std::vector<bool> querySchedule;
+    querySchedule.reserve(numQueries);
+
+    querySchedule.insert(
+        querySchedule.end(),
+        positiveQueries,
+        true);
+
+    querySchedule.insert(
+        querySchedule.end(),
+        negativeQueries,
+        false);
+
+    // Shuffle query types to avoid executing all positive
+    // queries before all negative queries.
+    std::mt19937_64 scheduleRng(12345);
+
+    std::shuffle(
+        querySchedule.begin(),
+        querySchedule.end(),
+        scheduleRng);
+
+    spdlog::info(
+        "RealDataExperiment: Starting {} queries "
+        "({} positive, {} negative, {:.1f}% positive).",
+        numQueries,
+        positiveQueries,
+        negativeQueries,
+        positiveQueryPercentage);
+
+    // ---------------------------------------------------------
+    // 3. Generate and execute queries.
+    // ---------------------------------------------------------
+
+    size_t generatedPositiveQueries = 0;
+    size_t generatedNegativeQueries = 0;
+
+    for (int queryIdx = 0; queryIdx < numQueries; ++queryIdx) {
+
+        GeneratedRealDataQuery query;
+
+        const bool generatePositive = querySchedule[queryIdx];
+
+        // -----------------------------------------------------
+        // Generate positive or negative query.
+        // -----------------------------------------------------
+
+        if (generatePositive) {
+
+            query = generatePositiveRealDataQuery(
+                realDataContext);
+
+            ++generatedPositiveQueries;
+
+        } else {
+
+            const size_t changedColumns =
+                static_cast<size_t>(queryIdx % 3 + 1);
+
+            const bool generated =
+                generateNegativeRealDataQuery(
+                    dbManager,
+                    columns,
+                    realDataContext,
+                    query,
+                    changedColumns,
+                    100);
+
+            if (!generated) {
+                spdlog::warn(
+                    "RealDataExperiment: Could not generate "
+                    "negative query {}. Skipping.",
+                    queryIdx);
+
+                continue;
+            }
+
+            ++generatedNegativeQueries;
+        }
+
+        // -----------------------------------------------------
+        // Initialize query result.
+        // -----------------------------------------------------
+
+        MixedQueryResult result{};
+
+        result.queryIndex = queryIdx;
+        result.isRealData = query.isPositive;
+        result.matchingColumns = query.matchingColumns;
+
+        // -----------------------------------------------------
+        // 4. Hash Index Scan - all SST indexes.
+        // -----------------------------------------------------
+
+        runHashIndexQueries(
+            dbManager,
+            columns,
+            query.values,
+            columnSstFiles,
+            result);
+
+        // -----------------------------------------------------
+        // 5. Hash Index + BloomTree - single hierarchy.
+        // -----------------------------------------------------
+
+        runHashSingleHierarchyQuery(
+            dbManager,
+            queryTrees[0],
+            columns,
+            query.values,
+            result);
+
+        // -----------------------------------------------------
+        // 6. Hierarchical BloomTree queries.
+        // -----------------------------------------------------
+
+        runHierarchicalQueries(
+            dbManager,
+            queryTrees,
+            columns,
+            query.values,
+            result);
+
+        // -----------------------------------------------------
+        // Store results.
+        // -----------------------------------------------------
+
+        results.push_back(std::move(result));
+
+        if ((queryIdx + 1) % 100 == 0) {
+            spdlog::info(
+                "RealDataExperiment: processed {} / {} queries",
+                queryIdx + 1,
+                numQueries);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // 7. Summary.
+    // ---------------------------------------------------------
+
+    spdlog::info(
+        "RealDataExperiment: Finished. "
+        "Generated positive: {}, negative: {}, total: {}.",
+        generatedPositiveQueries,
+        generatedNegativeQueries,
+        results.size());
+
+    return results;
 }
