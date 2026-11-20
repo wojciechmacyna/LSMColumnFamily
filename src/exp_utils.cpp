@@ -1932,6 +1932,137 @@ std::vector<MixedQueryResult> runMixedQueriesWithRealData(
     return results;
 }
 
+
+void saveRealDataStructureStats(
+    const std::string& filename,
+    const std::map<std::string, std::vector<std::string>>& columnSstFiles,
+    const std::map<std::string, BloomTree>& hierarchies,
+    uint64_t hashIndexSizeBytes)
+{
+    namespace fs = std::filesystem;
+
+    const fs::path outputPath(filename);
+
+    if (!outputPath.parent_path().empty()) {
+        fs::create_directories(outputPath.parent_path());
+    }
+
+    const bool writeHeader =
+        !fs::exists(outputPath) || fs::file_size(outputPath) == 0;
+
+    std::ofstream file(filename, std::ios::app);
+
+    if (!file.is_open()) {
+        throw std::runtime_error(
+            "Cannot open real-data structure statistics file: " +
+            filename);
+    }
+
+    if (writeHeader) {
+        file
+            << "column,"
+            << "sstFiles,"
+            << "bloomLeaves,"
+            << "bloomNodes,"
+            << "bloomInternalNodes,"
+            << "bloomMemoryBytes,"
+            << "bloomDiskBytes,"
+            << "hashIndexCount,"
+            << "hashIndexSizeBytes\n";
+    }
+
+    // Total statistics.
+    size_t totalSstFiles = 0;
+    size_t totalBloomLeaves = 0;
+    size_t totalBloomNodes = 0;
+    size_t totalBloomInternalNodes = 0;
+    uint64_t totalBloomMemoryBytes = 0;
+    uint64_t totalBloomDiskBytes = 0;
+    size_t totalHashIndexes = 0;
+
+    // Statistics for individual column families.
+    for (const auto& [column, sstFiles] : columnSstFiles) {
+
+        auto hierarchyIt = hierarchies.find(column);
+
+        if (hierarchyIt == hierarchies.end()) {
+            spdlog::warn(
+                "No BloomTree hierarchy found for column '{}'",
+                column);
+            continue;
+        }
+
+        const auto& tree = hierarchyIt->second;
+
+        const size_t sstCount = sstFiles.size();
+        const size_t leaves = tree.leafCount();
+        const size_t nodes = tree.nodeCount();
+
+        const size_t internalNodes =
+            nodes >= leaves ? nodes - leaves : 0;
+
+        const uint64_t memoryBytes = tree.memorySize();
+        const uint64_t diskBytes = tree.diskSize();
+
+        // One Hash Index per SST file.
+        const size_t hashIndexCount = sstCount;
+
+        file
+            << column << ','
+            << sstCount << ','
+            << leaves << ','
+            << nodes << ','
+            << internalNodes << ','
+            << memoryBytes << ','
+            << diskBytes << ','
+            << hashIndexCount << ",\n";
+
+        totalSstFiles += sstCount;
+        totalBloomLeaves += leaves;
+        totalBloomNodes += nodes;
+        totalBloomInternalNodes += internalNodes;
+        totalBloomMemoryBytes += memoryBytes;
+        totalBloomDiskBytes += diskBytes;
+        totalHashIndexes += hashIndexCount;
+
+        spdlog::info(
+            "StructureStats [{}]: SST={}, BloomLeaves={}, "
+            "BloomNodes={}, InternalNodes={}, Memory={} bytes, "
+            "Disk={} bytes",
+            column,
+            sstCount,
+            leaves,
+            nodes,
+            internalNodes,
+            memoryBytes,
+            diskBytes);
+    }
+
+    // Total statistics across all column families.
+    file
+        << "TOTAL,"
+        << totalSstFiles << ','
+        << totalBloomLeaves << ','
+        << totalBloomNodes << ','
+        << totalBloomInternalNodes << ','
+        << totalBloomMemoryBytes << ','
+        << totalBloomDiskBytes << ','
+        << totalHashIndexes << ','
+        << hashIndexSizeBytes << '\n';
+
+    file.close();
+
+    spdlog::info(
+        "Total structure: SST={}, BloomLeaves={}, BloomNodes={}, "
+        "HashIndexes={}, HashIndexSize={} bytes",
+        totalSstFiles,
+        totalBloomLeaves,
+        totalBloomNodes,
+        totalHashIndexes,
+        hashIndexSizeBytes);
+}
+
+
 void runRealDataExperiment(
     const std::string& baseDir,
     const std::string& dbName,
@@ -2047,6 +2178,16 @@ void runRealDataExperiment(
         "RealData: Query context preparation={} us",
         contextBuildTime);
 
+      // -------------------------------------------------
+      // 5. Save database structure statistics
+      // -------------------------------------------------
+
+    saveRealDataStructureStats(
+          "csv/real_data_structure_stats.csv",
+          columnSstFiles,
+          hierarchies,
+          hashIndexSize);
+
     // -------------------------------------------------
     // 6. Execute queries
     // -------------------------------------------------
@@ -2087,6 +2228,8 @@ void runRealDataExperiment(
 
     auto aggregatedResults =
         aggregateMixedQueryResults(results);
+
+        
 
     saveRealDataExperimentResults(
         "csv/real_data_comparison.csv",

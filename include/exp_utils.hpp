@@ -305,7 +305,12 @@ void saveRealDataExperimentResults(
     const RealDataExperimentResult& result,
     size_t dbSize);
 
-    
+    void saveRealDataStructureStats(
+    const std::string& filename,
+    const std::map<std::string, std::vector<std::string>>& columnSstFiles,
+    const std::map<std::string, BloomTree>& hierarchies,
+    uint64_t hashIndexSizeBytes);
+
 RealDataQueryContext loadRealDataQueryContext(
     DBManager& dbManager,
     const std::vector<std::string>& columns,

@@ -49,6 +49,7 @@ SRC = \
     src/exp8.cpp \
     src/expJ1.cpp \
     src/expJ2.cpp \
+    src/expJ_real_data.cpp\
     src/exp_utils.cpp \
     bloom/bloom_tree.cpp \
     bloom/bloom_filter.cpp \

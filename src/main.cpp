@@ -20,6 +20,7 @@
 #include "exp8.hpp"
 #include "expJ1.hpp"
 #include "expJ2.hpp"
+#include "expJ_real_data.hpp"
 #include "stopwatch.hpp"
 #include "test_params.hpp"
 
@@ -87,11 +88,7 @@ int main(int argc, char* argv[]) {
     //runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     // runExpJ2(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     //runNYCTaxiImport();
-    runRealDataExperiment(
-    "data",
-    "data/NYCTaxiDB",
-    100'000,
-    10);
+    runExp_real_data(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
 
   } catch (const std::exception& e) {
     spdlog::error("[Error] {}", e.what());
