@@ -91,7 +91,7 @@ int main(int argc, char* argv[]) {
     "data",
     "data/NYCTaxiDB",
     100'000,
-    1000);
+    10);
 
   } catch (const std::exception& e) {
     spdlog::error("[Error] {}", e.what());
