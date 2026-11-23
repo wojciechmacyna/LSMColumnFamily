@@ -367,10 +367,19 @@ inline std::vector<std::string> finalSstHashIndexAndIntersect(
 
         // No point searching further columns if one is empty.
         if (columnKeySets[i].empty()) {
+            spdlog::info(
+                "HashMulti diagnostics (early return): "
+                "posting keys={}, range checks={}, selected keys={}, "
+                "empty column index={}",
+                totalPostingKeys,
+                totalRangeChecks,
+                totalSelectedKeys,
+                i);
+
             gHashCandidateCount = 0;
             gHashVerificationCount = 0;
             return {};
-        }
+}
     }
 
     // 4. Intersect candidate keys from all columns.
