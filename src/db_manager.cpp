@@ -7,6 +7,7 @@
 #include <rocksdb/status.h>
 #include <rocksdb/table_properties.h>
 #include <spdlog/spdlog.h>
+#include <rocksdb/version.h>
 
 #include <boost/asio/post.hpp>
 #include <boost/asio/thread_pool.hpp>
@@ -818,7 +819,12 @@ void DBManager::compactAllColumnFamilies(size_t numRecords) {
   if (!db_) throw std::runtime_error("DB not open");
   rocksdb::CompactRangeOptions opts;
 
-  auto s_enable_del = db_->EnableFileDeletions(true);
+    #if ROCKSDB_MAJOR >= 10
+        auto s_enable_del = db_->EnableFileDeletions();
+    #else
+        auto s_enable_del = db_->EnableFileDeletions(true);
+    #endif
+    
   if (!s_enable_del.ok()) {
       spdlog::warn("Failed to ensure file deletions are enabled: {}. DB size may grow.", s_enable_del.ToString());
   }
