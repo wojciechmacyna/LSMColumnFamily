@@ -37,8 +37,9 @@ AggregatedQueryTimings runStandardQueries(
     return aggregated_timings;
   }
 
-  std::vector<long long> globalScanTimes, hierarchicalMultiTimes,
-      hierarchicalSingleTimes, hashIndexTimeStats; 
+std::vector<long long> globalScanTimes, hierarchicalMultiTimes,
+    hierarchicalSingleTimes, hashIndexTimeStats,
+    hierarchicalHashMultiTimes;
 
   std::vector<size_t> multiCol_bloomChecks_vec;
   std::vector<size_t> multiCol_leafBloomChecks_vec;
@@ -54,6 +55,7 @@ AggregatedQueryTimings runStandardQueries(
   hierarchicalMultiTimes.reserve(numRuns);
   hierarchicalSingleTimes.reserve(numRuns);
   hashIndexTimeStats.reserve(numRuns);
+  hierarchicalHashMultiTimes.reserve(numRuns);
 
   multiCol_bloomChecks_vec.reserve(numRuns);
   multiCol_leafBloomChecks_vec.reserve(numRuns);
@@ -185,6 +187,38 @@ AggregatedQueryTimings runStandardQueries(
     multiCol_sstChecks_vec.push_back(gSSTCheckCount.load());
     multiCol_nonLeafBloomChecks_vec.push_back(gBloomCheckCount.load() - gLeafBloomCheckCount.load());
 
+
+
+    // --- Hierarchical Multi-Column Hash Index Query ---
+    gBloomCheckCount = 0;
+    gLeafBloomCheckCount = 0;
+    gSSTCheckCount = 0;
+
+    gHashIndexOpenCount = 0;
+    gHashLookupCount = 0;
+    gHashCandidateCount = 0;
+    gHashVerificationCount = 0;
+
+    stopwatch.start();
+    [[maybe_unused]] std::vector<std::string> hierarchicalHashMatches =
+        multiColumnQueryHierarchicalHashIndex(
+            queryTrees, columns, currentExpectedValues, "", "", dbManager);
+    stopwatch.stop();
+
+    hierarchicalHashMultiTimes.push_back(stopwatch.elapsedMicros());
+
+    if (hierarchicalMatches != hierarchicalHashMatches) {
+    spdlog::error(
+        "HashMultiHierarchyIndex returned different results than "
+        "BloomTree Multi-Column Query. Run: {}",
+        i + 1);
+} else {
+    spdlog::info(
+        "HashMultiHierarchyIndex results match BloomTree Multi-Column Query. "
+        "Run: {}",
+        i + 1);
+}
+
     // --- Hierarchical Single Column Query ---
     // Ensure queryTrees[0] is valid before dereferencing. Already checked by
     // queryTrees.empty()
@@ -214,6 +248,8 @@ AggregatedQueryTimings runStandardQueries(
       calculateNumericStatistics(hierarchicalSingleTimes);
   aggregated_timings.hashIndexTimeStats =   
       calculateNumericStatistics(hashIndexTimeStats);  
+  aggregated_timings.hierarchicalHashMultiTimeStats =
+    calculateNumericStatistics(hierarchicalHashMultiTimes);
 
   aggregated_timings.multiCol_bloomChecksStats =
       calculateCountStatistics(multiCol_bloomChecks_vec);
@@ -523,6 +559,13 @@ std::vector<MixedQueryResult> runMixedQueriesWithCsvData(
             query.values,
             result);
 
+        runHierarchicalHashIndexQuery(
+            dbManager,
+            queryTrees,
+            columns,
+            query.values,
+            result);
+
         results.push_back(std::move(result));
 
         std::this_thread::sleep_for(
@@ -708,6 +751,14 @@ std::vector<MixedQueryResult> runMixedQueriesWithRealData(
         // -----------------------------------------------------
 
         runHierarchicalQueries(
+            dbManager,
+            queryTrees,
+            columns,
+            query.values,
+            result);
+
+
+        runHierarchicalHashIndexQuery(
             dbManager,
             queryTrees,
             columns,

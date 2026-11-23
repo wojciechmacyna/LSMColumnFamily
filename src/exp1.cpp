@@ -36,7 +36,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
 
   const std::vector<std::string> columns = {"phone", "mail", "address"};
   //const std::vector<int> dbSizes = {10'000'000, defaultNumRecords, 100'000'000, 200'000'000};
-  const std::vector<int> dbSizes = {5'000'000};
+  const std::vector<int> dbSizes = {defaultNumRecords};
 
 
   for (const auto& dbSize : dbSizes) {
@@ -66,7 +66,7 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
         dbManager, hierarchies, columns, dbSize, numStandardQueries, skipDbScan, config, &columnSstFiles);
 
     writeCsvHeader("csv/exp_1_basic_metrics.csv",
-                 "dbSize,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime, hashScanTime");
+                 "dbSize,globalScanTime,hierarchicalSingleTime,hierarchicalMultiTime, hashScanTime, hierarchicalHashMultiTime");
     // Write basic metrics - timings only (4 columns)
     std::ofstream basic_metrics("csv/exp_1_basic_metrics.csv", std::ios::app);
     if (basic_metrics) {
@@ -74,7 +74,8 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
                     << timings.globalScanTimeStats.average << ","
                     << timings.hierarchicalSingleTimeStats.average << ","
                     << timings.hierarchicalMultiTimeStats.average << ","
-                    << timings.hashIndexTimeStats.average << "\n";
+                    << timings.hashIndexTimeStats.average << ","
+                    << timings.hierarchicalHashMultiTimeStats.average << "\n";
       basic_metrics.close();
     }
 
@@ -113,10 +114,17 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
 
 
     writeCsvHeader("csv/exp_1_timing_comparison.csv",
-                 "dbSize,realDataPercentage,cardinality,"
-                 "avgRealMultiTime,avgRealSingleTime,avgRealHashTime,avgRealHashSingleTime,avgRealHashSingleHierarchyTime,"
-                 "avgFalseMultiTime,avgFalseSingleTime,avgFalseHashTime, avgFalseHashSingleTime, avgFalseHashSingleHierarchyTime,"
-                 "avgHierarchicalMultiTime,avgHierarchicalSingleTime, avgHashIndexTime, avgHashSingleIndexTime, avgHashSingleHierarchyIndexTime,");
+    "dbSize,realDataPercentage,cardinality,"
+    "avgRealMultiTime,avgRealSingleTime,avgRealHashTime,"
+    "avgRealHashSingleTime,avgRealHashSingleHierarchyTime,"
+    "avgRealHashMultiHierarchyIndexTime,"
+    "avgFalseMultiTime,avgFalseSingleTime,avgFalseHashTime,"
+    "avgFalseHashSingleTime,avgFalseHashSingleHierarchyTime,"
+    "avgFalseHashMultiHierarchyIndexTime,"
+    "avgHierarchicalMultiTime,avgHierarchicalSingleTime,"
+    "avgHashIndexTime,avgHashSingleIndexTime,"
+    "avgHashSingleHierarchyIndexTime,"
+    "avgHashMultiHierarchyIndexTime");
     std::ofstream timing_comparison("csv/exp_1_timing_comparison.csv", std::ios::app);
 
     writeCsvHeader("csv/exp_1_comprehensive_checks.csv",
@@ -155,14 +163,28 @@ void runExp1(std::string baseDir, bool initMode, std::string sharedDbName,
 
       // Timing comparison (8 columns)
       if (timing_comparison) {
-        timing_comparison << dbSize << "," << result.realDataPercentage << "," << config.cardinality << "," 
-                         << result.avgRealDataMultiTime << "," << result.avgRealDataSingleTime << "," << result.avgRealHashIndexTime 
-                         << "," << result.avgRealHashSingleIndexTime << "," << result.avgRealHashSingleHierarchyIndexTime << ","
-                         << result.avgFalseDataMultiTime << "," << result.avgFalseDataSingleTime << "," << result.avgFalseHashIndexTime << "," 
-                         << result.avgFalseHashSingleIndexTime << "," << result.avgFalseHashSingleHierachyIndexTime << ","
-                         << result.avgHierarchicalMultiTime << "," << result.avgHierarchicalSingleTime << "," << result.avgHashIndexTime << "," 
-                         << result.avgHashSingleIndexTime << "," << result.avgHashSingleHierarchyIndexTime << "\n";
-      }
+        timing_comparison
+    << dbSize << ","
+    << result.realDataPercentage << ","
+    << config.cardinality << ","
+    << result.avgRealDataMultiTime << ","
+    << result.avgRealDataSingleTime << ","
+    << result.avgRealHashIndexTime << ","
+    << result.avgRealHashSingleIndexTime << ","
+    << result.avgRealHashSingleHierarchyIndexTime << ","
+    << result.avgRealHashMultiHierarchyIndexTime << ","
+    << result.avgFalseDataMultiTime << ","
+    << result.avgFalseDataSingleTime << ","
+    << result.avgFalseHashIndexTime << ","
+    << result.avgFalseHashSingleIndexTime << ","
+    << result.avgFalseHashSingleHierachyIndexTime << ","
+    << result.avgFalseHashMultiHierarchyIndexTime << ","
+    << result.avgHierarchicalMultiTime << ","
+    << result.avgHierarchicalSingleTime << ","
+    << result.avgHashIndexTime << ","
+    << result.avgHashSingleIndexTime << ","
+    << result.avgHashSingleHierarchyIndexTime << ","
+    << result.avgHashMultiHierarchyIndexTime << "\n";      }
 
 
       if (expJ1){

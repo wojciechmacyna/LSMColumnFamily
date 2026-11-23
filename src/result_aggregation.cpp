@@ -27,16 +27,19 @@ void saveRealDataExperimentResults(
             << "avgRealHashIndexTime,"
             << "avgRealHashSingleIndexTime,"
             << "avgRealHashSingleHierarchyIndexTime,"
+            << "avgRealDataHierarchicalHashMultiTime,"
             << "avgFalseDataMultiTime,"
             << "avgFalseDataSingleTime,"
             << "avgFalseHashIndexTime,"
             << "avgFalseHashSingleIndexTime,"
             << "avgFalseHashSingleHierarchyIndexTime,"
+            << "avgFalseDataHierarchicalHashMultiTime,"
             << "avgHierarchicalMultiTime,"
             << "avgHierarchicalSingleTime,"
             << "avgHashIndexTime,"
             << "avgHashSingleIndexTime,"
-            << "avgHashSingleHierarchyIndexTime\n";
+            << "avgHashSingleHierarchyIndexTime,"
+            << "avgHierarchicalHashMultiTime\n";
     }
 
     csv
@@ -47,16 +50,19 @@ void saveRealDataExperimentResults(
         << result.avgRealHashIndexTime << ","
         << result.avgRealHashSingleIndexTime << ","
         << result.avgRealHashSingleHierarchyIndexTime << ","
+        << result.avgRealDataHierarchicalHashMultiTime << ","
         << result.avgFalseDataMultiTime << ","
         << result.avgFalseDataSingleTime << ","
         << result.avgFalseHashIndexTime << ","
         << result.avgFalseHashSingleIndexTime << ","
         << result.avgFalseHashSingleHierarchyIndexTime << ","
+        << result.avgFalseDataHierarchicalHashMultiTime << ","
         << result.avgHierarchicalMultiTime << ","
         << result.avgHierarchicalSingleTime << ","
         << result.avgHashIndexTime << ","
         << result.avgHashSingleIndexTime << ","
-        << result.avgHashSingleHierarchyIndexTime << "\n";
+        << result.avgHashSingleHierarchyIndexTime << ","
+        << result.avgHierarchicalHashMultiTime << "\n";
 
     csv.close();
 
@@ -71,6 +77,10 @@ RealDataExperimentResult aggregateMixedQueryResults(
     const std::vector<MixedQueryResult>& results)
 {
     RealDataExperimentResult aggregated;
+
+    double realHashMulti = 0.0;
+    double falseHashMulti = 0.0;
+    double totalHashMulti = 0.0;
 
     double realMulti = 0.0;
     double realSingle = 0.0;
@@ -101,6 +111,7 @@ RealDataExperimentResult aggregateMixedQueryResults(
             realHash += result.hashIndexTime;
             realHashSingle += result.hashSingleIndexTime;
             realHashSingleHierarchy += result.hashSingleHierarchyIndexTime;
+            realHashMulti += result.hierarchicalHashMultiTime;
         } else {
             ++aggregated.negativeQueries;
 
@@ -109,6 +120,7 @@ RealDataExperimentResult aggregateMixedQueryResults(
             falseHash += result.hashIndexTime;
             falseHashSingle += result.hashSingleIndexTime;
             falseHashSingleHierarchy += result.hashSingleHierarchyIndexTime;
+            falseHashMulti += result.hierarchicalHashMultiTime;
         }
 
         totalMulti += result.hierarchicalMultiTime;
@@ -116,6 +128,7 @@ RealDataExperimentResult aggregateMixedQueryResults(
         totalHash += result.hashIndexTime;
         totalHashSingle += result.hashSingleIndexTime;
         totalHashSingleHierarchy += result.hashSingleHierarchyIndexTime;
+        totalHashMulti += result.hierarchicalHashMultiTime;
     }
 
     if (aggregated.positiveQueries > 0) {
@@ -129,6 +142,8 @@ RealDataExperimentResult aggregateMixedQueryResults(
             realHashSingle / aggregated.positiveQueries;
         aggregated.avgRealHashSingleHierarchyIndexTime =
             realHashSingleHierarchy / aggregated.positiveQueries;
+        aggregated.avgRealDataHierarchicalHashMultiTime =
+            realHashMulti / aggregated.positiveQueries;
     }
 
     if (aggregated.negativeQueries > 0) {
@@ -142,6 +157,8 @@ RealDataExperimentResult aggregateMixedQueryResults(
             falseHashSingle / aggregated.negativeQueries;
         aggregated.avgFalseHashSingleHierarchyIndexTime =
             falseHashSingleHierarchy / aggregated.negativeQueries;
+        aggregated.avgFalseDataHierarchicalHashMultiTime =
+            falseHashMulti / aggregated.negativeQueries;
     }
 
     if (aggregated.totalQueries > 0) {
@@ -155,6 +172,8 @@ RealDataExperimentResult aggregateMixedQueryResults(
             totalHashSingle / aggregated.totalQueries;
         aggregated.avgHashSingleHierarchyIndexTime =
             totalHashSingleHierarchy / aggregated.totalQueries;
+        aggregated.avgHierarchicalHashMultiTime =
+            totalHashMulti / aggregated.totalQueries;
 
         aggregated.realDataPercentage =
             100.0 * aggregated.positiveQueries / aggregated.totalQueries;

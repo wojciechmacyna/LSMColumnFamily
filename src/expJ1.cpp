@@ -128,12 +128,15 @@ void runExpJ1ForConfig(
         "avgRealMultiTime,avgRealSingleTime,"
         "avgRealHashTime,avgRealHashSingleTime,"
         "avgRealHashSingleHierarchyTime,"
+        "avgRealHashMultiHierarchyIndexTime,"
         "avgFalseMultiTime,avgFalseSingleTime,"
         "avgFalseHashTime,avgFalseHashSingleTime,"
         "avgFalseHashSingleHierarchyTime,"
+        "avgFalseHashMultiHierarchyIndexTime,"
         "avgHierarchicalMultiTime,avgHierarchicalSingleTime,"
         "avgHashIndexTime,avgHashSingleIndexTime,"
-        "avgHashSingleHierarchyIndexTime"
+        "avgHashSingleHierarchyIndexTime,"
+        "avgHashMultiHierarchyIndexTime"
     );
 
     std::ofstream expJ1(
@@ -194,18 +197,19 @@ void runExpJ1ForConfig(
                 << result.avgRealHashIndexTime << ","
                 << result.avgRealHashSingleIndexTime << ","
                 << result.avgRealHashSingleHierarchyIndexTime << ","
-
+                << result.avgRealHashMultiHierarchyIndexTime << ","
                 << result.avgFalseDataMultiTime << ","
                 << result.avgFalseDataSingleTime << ","
                 << result.avgFalseHashIndexTime << ","
                 << result.avgFalseHashSingleIndexTime << ","
                 << result.avgFalseHashSingleHierachyIndexTime << ","
-
+                << result.avgFalseHashMultiHierarchyIndexTime << ","
                 << result.avgHierarchicalMultiTime << ","
                 << result.avgHierarchicalSingleTime << ","
                 << result.avgHashIndexTime << ","
                 << result.avgHashSingleIndexTime << ","
-                << result.avgHashSingleHierarchyIndexTime
+                << result.avgHashSingleHierarchyIndexTime << ","
+                << result.avgHashMultiHierarchyIndexTime
                 << "\n";
         }
 

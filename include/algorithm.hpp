@@ -19,6 +19,7 @@
 #include "db_manager.hpp"
 #include "node.hpp"
 #include "stopwatch.hpp"
+#include "sst_hash_index.hpp"
 
 extern boost::asio::thread_pool globalThreadPool;
 
@@ -260,6 +261,163 @@ inline std::vector<std::string> finalSstScanAndIntersect(
 return verifiedResults;
 }
 
+
+
+inline std::vector<std::string> finalSstHashIndexAndIntersect(
+    const std::vector<Combo>& leafCombinations,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    DBManager& dbManager)
+{
+    const size_t n = values.size();
+
+    if (n == 0 || columns.size() != n) {
+        return {};
+    }
+
+    // One map per column:
+    // SST filename -> relevant key ranges.
+    std::vector<std::map<std::string, std::vector<SSTRange>>>
+        columnSSTRanges(n);
+
+    // 1. Collect SST files and key ranges selected by BloomTree.
+    for (const Combo& combo : leafCombinations) {
+        if (combo.nodes.size() != n) {
+            throw std::runtime_error("Invalid leaf combination.");
+        }
+
+        for (size_t i = 0; i < n; ++i) {
+            const Node* leaf = combo.nodes[i];
+
+            if (leaf == nullptr) {
+                continue;
+            }
+
+            const std::string scanStart =
+                std::max(combo.rangeStart, leaf->startKey);
+
+            const std::string scanEnd =
+                std::min(combo.rangeEnd, leaf->endKey);
+
+            if (scanStart > scanEnd) {
+                continue;
+            }
+
+            columnSSTRanges[i][leaf->filename].push_back({
+                scanStart,
+                scanEnd
+            });
+        }
+    }
+
+    // 2. Normalize ranges for each SST file.
+    for (size_t i = 0; i < n; ++i) {
+        for (auto& [filename, ranges] : columnSSTRanges[i]) {
+            normalizeSSTRanges(ranges);
+        }
+    }
+
+    // 3. Search only hash indexes belonging to selected SST files.
+    std::vector<std::unordered_set<std::string>> columnKeySets(n);
+
+    for (size_t i = 0; i < n; ++i) {
+        for (const auto& [filename, ranges] : columnSSTRanges[i]) {
+
+            const std::string indexPath =
+                filename + "." + columns[i] + ".hidx";
+
+            SSTHashIndex index;
+
+            if (!index.open(indexPath)) {
+                throw std::runtime_error(
+                    "Cannot open hash index: " + indexPath);
+            }
+
+            ++gHashIndexOpenCount;
+            ++gHashLookupCount;
+            ++gSSTCheckCount;
+
+            std::vector<std::string> keys;
+
+            if (!index.lookup(values[i], keys)) {
+                throw std::runtime_error(
+                    "Hash index lookup failed: " + indexPath);
+            }
+
+            // Keep only keys belonging to BloomTree-selected ranges.
+            for (const auto& key : keys) {
+                for (const auto& range : ranges) {
+                    if (key >= range.startKey &&
+                        key <= range.endKey) {
+                        columnKeySets[i].insert(key);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // No point searching further columns if one is empty.
+        if (columnKeySets[i].empty()) {
+            gHashCandidateCount = 0;
+            gHashVerificationCount = 0;
+            return {};
+        }
+    }
+
+    // 4. Intersect candidate keys from all columns.
+    std::unordered_set<std::string> result =
+        std::move(columnKeySets[0]);
+
+    for (size_t i = 1; i < n; ++i) {
+        std::unordered_set<std::string> intersection;
+
+        intersection.reserve(
+            std::min(result.size(), columnKeySets[i].size()));
+
+        for (const auto& key : result) {
+            if (columnKeySets[i].find(key) !=
+                columnKeySets[i].end()) {
+                intersection.insert(key);
+            }
+        }
+
+        result = std::move(intersection);
+
+        if (result.empty()) {
+            break;
+        }
+    }
+
+    gHashCandidateCount = result.size();
+
+    // 5. Verify candidates against current RocksDB values.
+    std::vector<std::string> verifiedResults;
+    verifiedResults.reserve(result.size());
+
+    gHashVerificationCount = result.size();
+
+    for (const auto& key : result) {
+        bool valid = true;
+
+        for (size_t i = 0; i < n; ++i) {
+            const std::string currentValue =
+                dbManager.getValue(columns[i], key);
+
+            if (currentValue != values[i]) {
+                valid = false;
+                break;
+            }
+        }
+
+        if (valid) {
+            verifiedResults.push_back(key);
+        }
+    }
+
+    std::sort(verifiedResults.begin(), verifiedResults.end());
+
+    return verifiedResults;
+}
 
 
 inline void dfsMultiColumn(
@@ -531,6 +689,106 @@ inline std::vector<std::string> multiColumnQueryHierarchical(
 
     return matches;
 }
+
+
+
+
+inline std::vector<std::string> multiColumnQueryHierarchicalHashIndex(
+    std::vector<BloomTree>& trees,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    const std::string& globalStart,
+    const std::string& globalEnd,
+    DBManager& dbManager)
+{
+    StopWatch sw;
+    sw.start();
+
+    const size_t n = trees.size();
+
+    if (n == 0 || n != values.size() || n != columns.size()) {
+        std::cerr
+            << "Error: Number of trees, columns and values must match "
+               "and be non-empty.\n";
+        sw.stop();
+        return {};
+    }
+
+    // Check roots.
+    for (const auto& tree : trees) {
+        if (tree.root == nullptr) {
+            sw.stop();
+            return {};
+        }
+    }
+
+    Combo start;
+    start.nodes.resize(n);
+
+    std::string s = globalStart.empty()
+        ? trees[0].root->startKey
+        : globalStart;
+
+    std::string e = globalEnd.empty()
+        ? trees[0].root->endKey
+        : globalEnd;
+
+    for (size_t i = 0; i < n; ++i) {
+        start.nodes[i] = trees[i].root;
+
+        s = std::max(s, trees[i].root->startKey);
+        e = std::min(e, trees[i].root->endKey);
+    }
+
+    if (s > e) {
+        sw.stop();
+        return {};
+    }
+
+    start.rangeStart = s;
+    start.rangeEnd = e;
+
+    // Phase 1: Traverse BloomTree hierarchies.
+    std::vector<Combo> leafCombinations;
+
+    dfsMultiColumn(
+        values,
+        std::move(start),
+        dbManager,
+        true,
+        leafCombinations);
+
+    // Phase 2: Search hash indexes belonging to selected SST files.
+    std::vector<std::string> matches =
+        finalSstHashIndexAndIntersect(
+            leafCombinations,
+            columns,
+            values,
+            dbManager);
+
+    sw.stop();
+
+    spdlog::critical(
+        "Multi-column hierarchical hash-index query took {} us, "
+        "found {} matching keys.",
+        sw.elapsedMicros(),
+        matches.size());
+
+    spdlog::info(
+        "Bloom filters checked: {} (total), {} (leaves only), "
+        "SSTables checked: {}, hash indexes opened: {}, "
+        "hash lookups: {}, candidates: {}, verifications: {}",
+        gBloomCheckCount.load(),
+        gLeafBloomCheckCount.load(),
+        gSSTCheckCount.load(),
+        gHashIndexOpenCount.load(),
+        gHashLookupCount.load(),
+        gHashCandidateCount.load(),
+        gHashVerificationCount.load());
+
+    return matches;
+}
+
 
 
 inline std::discrete_distribution<size_t> zipfDistribution (const double zipfExponent, const size_t maxZipfCardinality, const size_t numRecords){

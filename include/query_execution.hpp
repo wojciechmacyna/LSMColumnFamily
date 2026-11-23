@@ -31,3 +31,11 @@ void runHierarchicalQueries(
     const std::vector<std::string>& columns,
     const std::vector<std::string>& values,
     MixedQueryResult& result);
+
+    // Executes multi-column BloomTree queries using per-SSTable hash indexes.
+void runHierarchicalHashIndexQuery(
+    DBManager& dbManager,
+    std::vector<BloomTree>& queryTrees,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    MixedQueryResult& result);

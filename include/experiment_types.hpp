@@ -52,6 +52,17 @@ struct MixedQueryResult {
     long long hierarchicalSingleTime;
     long long hashSingleHierarchyIndexTime;
 
+    long long hierarchicalHashMultiTime = 0;
+
+    size_t hierarchicalHashMultiIndexOpenCount = 0;
+    size_t hierarchicalHashMultiLookupCount = 0;
+    size_t hierarchicalHashMultiCandidateCount = 0;
+    size_t hierarchicalHashMultiVerificationCount = 0;
+
+    size_t hierarchicalHashMultiBloomChecks = 0;
+    size_t hierarchicalHashMultiLeafBloomChecks = 0;
+    size_t hierarchicalHashMultiSstChecks = 0;
+
     size_t multiCol_bloomChecks;
     size_t multiCol_leafBloomChecks;
     size_t multiCol_sstChecks;
@@ -97,16 +108,23 @@ struct AccumulatedQueryMetrics {
     double avgHashIndexTime;
     double avgHashSingleIndexTime;
     double avgHashSingleHierarchyIndexTime;
+
+    double avgHashMultiHierarchyIndexTime = 0.0;
+
     double avgRealDataMultiTime;
     double avgRealDataSingleTime;
     double avgRealHashIndexTime;
     double avgRealHashSingleIndexTime;
     double avgRealHashSingleHierarchyIndexTime;
+    double avgRealHashMultiHierarchyIndexTime = 0.0;
+
     double avgFalseDataMultiTime;
     double avgFalseDataSingleTime;
     double avgFalseHashIndexTime;
     double avgFalseHashSingleIndexTime;
     double avgFalseHashSingleHierachyIndexTime;
+    double avgFalseHashMultiHierarchyIndexTime = 0.0;
+
 
     double avgMultiBloomChecks;
     double avgMultiLeafBloomChecks;
@@ -173,6 +191,7 @@ struct AggregatedQueryTimings {
     TimingStatistics hierarchicalMultiTimeStats;
     TimingStatistics hierarchicalSingleTimeStats;
     TimingStatistics hashIndexTimeStats;
+    TimingStatistics hierarchicalHashMultiTimeStats;
 
     CountStatistics multiCol_bloomChecksStats;
     CountStatistics multiCol_leafBloomChecksStats;
@@ -218,18 +237,21 @@ struct RealDataExperimentResult {
     double avgRealHashIndexTime = 0.0;
     double avgRealHashSingleIndexTime = 0.0;
     double avgRealHashSingleHierarchyIndexTime = 0.0;
+    double avgRealDataHierarchicalHashMultiTime = 0.0; // NEW
 
     double avgFalseDataMultiTime = 0.0;
     double avgFalseDataSingleTime = 0.0;
     double avgFalseHashIndexTime = 0.0;
     double avgFalseHashSingleIndexTime = 0.0;
     double avgFalseHashSingleHierarchyIndexTime = 0.0;
+    double avgFalseDataHierarchicalHashMultiTime = 0.0; // NEW
 
     double avgHierarchicalMultiTime = 0.0;
     double avgHierarchicalSingleTime = 0.0;
     double avgHashIndexTime = 0.0;
     double avgHashSingleIndexTime = 0.0;
     double avgHashSingleHierarchyIndexTime = 0.0;
+    double avgHierarchicalHashMultiTime = 0.0; // NEW
 
     size_t positiveQueries = 0;
     size_t negativeQueries = 0;

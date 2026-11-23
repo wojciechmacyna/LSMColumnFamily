@@ -85,7 +85,7 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
         // 2. Initialize metrics
         // --------------------------------------------------
 
-        AccumulatedQueryMetrics metrics;
+        AccumulatedQueryMetrics metrics{};
 
         metrics.realDataPercentage = percentage;
         metrics.totalQueries = results.size();
@@ -114,6 +114,10 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
         long long falseHashIndexTimeSum = 0;
         long long falseHashSingleIndexTimeSum = 0;
         long long falseHashSingleHierarchyIndexTimeSum = 0;
+
+        long long totalHierarchicalHashMultiTime = 0;
+        long long realHierarchicalHashMultiTimeSum = 0;
+        long long falseHierarchicalHashMultiTimeSum = 0;
 
         // --------------------------------------------------
         // 4. Initialize BloomTree counters
@@ -156,6 +160,8 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
             totalHashSingleIndexTime += result.hashSingleIndexTime;
             totalHashSingleHierarchyIndexTime +=
                 result.hashSingleHierarchyIndexTime;
+            totalHierarchicalHashMultiTime +=
+                result.hierarchicalHashMultiTime;
 
             // BloomTree measurements
             totalMultiBloomChecks += result.multiCol_bloomChecks;
@@ -182,6 +188,8 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
                 realHashSingleIndexTimeSum += result.hashSingleIndexTime;
                 realHashSingleHierarchyIndexTimeSum +=
                     result.hashSingleHierarchyIndexTime;
+                realHierarchicalHashMultiTimeSum +=
+                    result.hierarchicalHashMultiTime;
 
                 realMultiBloomChecksSum += result.multiCol_bloomChecks;
                 realMultiSSTChecksSum += result.multiCol_sstChecks;
@@ -198,6 +206,8 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
                 falseHashSingleIndexTimeSum += result.hashSingleIndexTime;
                 falseHashSingleHierarchyIndexTimeSum +=
                     result.hashSingleHierarchyIndexTime;
+                falseHierarchicalHashMultiTimeSum +=
+                    result.hierarchicalHashMultiTime;
 
                 falseMultiBloomChecksSum += result.multiCol_bloomChecks;
                 falseMultiSSTChecksSum += result.multiCol_sstChecks;
@@ -226,6 +236,9 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
 
         metrics.avgHashSingleHierarchyIndexTime =
             totalHashSingleHierarchyIndexTime / queryCount;
+
+        metrics.avgHashMultiHierarchyIndexTime =
+            totalHierarchicalHashMultiTime / queryCount;
 
         // BloomTree averages
         metrics.avgMultiBloomChecks =
@@ -373,6 +386,9 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
 
             metrics.avgRealHashSingleVerificationCount =
                 realHash.singleVerification / count;
+
+            metrics.avgRealHashMultiHierarchyIndexTime =
+                realHierarchicalHashMultiTimeSum / count;
         }
 
         // --------------------------------------------------
@@ -436,6 +452,9 @@ std::vector<AccumulatedQueryMetrics> runComprehensiveQueryAnalysis(
 
             metrics.avgFalseHashSingleVerificationCount =
                 falseHash.singleVerification / count;
+
+            metrics.avgFalseHashMultiHierarchyIndexTime =
+                falseHierarchicalHashMultiTimeSum / count;
         }
 
         // --------------------------------------------------

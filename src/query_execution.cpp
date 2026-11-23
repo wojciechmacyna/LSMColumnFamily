@@ -242,3 +242,69 @@ void runHierarchicalQueries(
         static_cast<double>(result.singleCol_nonLeafBloomChecks);
 }
 
+
+/**
+ * @brief Executes a multi-column BloomTree query accelerated by per-SSTable hash indexes.
+ *
+ * Records execution time and BloomTree/hash-index operation counters.
+ */
+void runHierarchicalHashIndexQuery(
+    DBManager& dbManager,
+    std::vector<BloomTree>& queryTrees,
+    const std::vector<std::string>& columns,
+    const std::vector<std::string>& values,
+    MixedQueryResult& result)
+{
+    if (columns.empty() || queryTrees.empty()) {
+        throw std::invalid_argument(
+            "Columns and queryTrees must not be empty.");
+    }
+
+    StopWatch stopwatch;
+
+    gBloomCheckCount = 0;
+    gLeafBloomCheckCount = 0;
+    gSSTCheckCount = 0;
+
+    gHashIndexOpenCount = 0;
+    gHashLookupCount = 0;
+    gHashCandidateCount = 0;
+    gHashVerificationCount = 0;
+
+    stopwatch.start();
+
+    [[maybe_unused]] auto matches =
+        multiColumnQueryHierarchicalHashIndex(
+            queryTrees,
+            columns,
+            values,
+            "",
+            "",
+            dbManager);
+
+    stopwatch.stop();
+
+    result.hierarchicalHashMultiTime = stopwatch.elapsedMicros();
+
+    result.hierarchicalHashMultiBloomChecks =
+        gBloomCheckCount.load();
+
+    result.hierarchicalHashMultiLeafBloomChecks =
+        gLeafBloomCheckCount.load();
+
+    result.hierarchicalHashMultiSstChecks =
+        gSSTCheckCount.load();
+
+    result.hierarchicalHashMultiIndexOpenCount =
+        gHashIndexOpenCount.load();
+
+    result.hierarchicalHashMultiLookupCount =
+        gHashLookupCount.load();
+
+    result.hierarchicalHashMultiCandidateCount =
+        gHashCandidateCount.load();
+
+    result.hierarchicalHashMultiVerificationCount =
+        gHashVerificationCount.load();
+}
+
