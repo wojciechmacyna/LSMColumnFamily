@@ -320,6 +320,10 @@ inline std::vector<std::string> finalSstHashIndexAndIntersect(
     // 3. Search only hash indexes belonging to selected SST files.
     std::vector<std::unordered_set<std::string>> columnKeySets(n);
 
+    size_t totalPostingKeys = 0;
+    size_t totalRangeChecks = 0;
+    size_t totalSelectedKeys = 0;
+
     for (size_t i = 0; i < n; ++i) {
         for (const auto& [filename, ranges] : columnSSTRanges[i]) {
 
@@ -344,16 +348,21 @@ inline std::vector<std::string> finalSstHashIndexAndIntersect(
                     "Hash index lookup failed: " + indexPath);
             }
 
+            totalPostingKeys += keys.size();
+
             // Keep only keys belonging to BloomTree-selected ranges.
             for (const auto& key : keys) {
-                for (const auto& range : ranges) {
-                    if (key >= range.startKey &&
-                        key <= range.endKey) {
-                        columnKeySets[i].insert(key);
-                        break;
+            for (const auto& range : ranges) {
+                ++totalRangeChecks;
+
+                if (key >= range.startKey && key <= range.endKey) {
+                    if (columnKeySets[i].insert(key).second) {
+                        ++totalSelectedKeys;
                     }
+                    break;
                 }
             }
+        }
         }
 
         // No point searching further columns if one is empty.

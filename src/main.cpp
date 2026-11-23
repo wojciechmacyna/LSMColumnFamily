@@ -85,10 +85,10 @@ int main(int argc, char* argv[]) {
     //runExp6(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp7(sharedDbName, defaultNumRecords, skipDbScan);
     // runExp8(baseDir, initMode, skipDbScan);
-    runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    //runExpJ1(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
     // runExpJ2(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
    
-    //runExp_real_data(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
+    runExp_real_data(baseDir, initMode, sharedDbName, defaultNumRecords, skipDbScan);
 
   } catch (const std::exception& e) {
     spdlog::error("[Error] {}", e.what());
