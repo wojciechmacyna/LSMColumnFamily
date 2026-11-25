@@ -269,6 +269,16 @@ inline std::vector<std::string> finalSstHashIndexAndIntersect(
     const std::vector<std::string>& values,
     DBManager& dbManager)
 {
+
+    using Clock = std::chrono::steady_clock;
+
+    const auto totalStart = Clock::now();
+
+    double lookupTimeUs = 0.0;
+    double rangeFilterTimeUs = 0.0;
+    double intersectionTimeUs = 0.0;
+
+
     const size_t n = values.size();
 
     if (n == 0 || columns.size() != n) {
@@ -317,16 +327,27 @@ inline std::vector<std::string> finalSstHashIndexAndIntersect(
         }
     }
 
-    // 3. Search only hash indexes belonging to selected SST files.
-    std::vector<std::unordered_set<std::string>> columnKeySets(n);
+    
+    // 3. Retrieve posting lists from selected SST hash indexes.
+    struct ColumnPostings {
+        size_t columnIndex;
+        std::vector<std::string> keys;
+        const std::map<std::string, std::vector<SSTRange>>* ranges;
+    };
+
+    std::vector<ColumnPostings> postings;
+    postings.reserve(n);
 
     size_t totalPostingKeys = 0;
     size_t totalRangeChecks = 0;
     size_t totalSelectedKeys = 0;
 
     for (size_t i = 0; i < n; ++i) {
-        for (const auto& [filename, ranges] : columnSSTRanges[i]) {
+        ColumnPostings columnPosting;
+        columnPosting.columnIndex = i;
+        columnPosting.ranges = &columnSSTRanges[i];
 
+        for (const auto& [filename, ranges] : columnSSTRanges[i]) {
             const std::string indexPath =
                 filename + "." + columns[i] + ".hidx";
 
@@ -343,63 +364,105 @@ inline std::vector<std::string> finalSstHashIndexAndIntersect(
 
             std::vector<std::string> keys;
 
+            const auto lookupStart = Clock::now();
+
             if (!index.lookup(values[i], keys)) {
                 throw std::runtime_error(
                     "Hash index lookup failed: " + indexPath);
             }
 
+            lookupTimeUs += std::chrono::duration<double, std::micro>(
+                Clock::now() - lookupStart).count();
+
             totalPostingKeys += keys.size();
 
-            // Keep only keys belonging to BloomTree-selected ranges.
-            for (const auto& key : keys) {
-            for (const auto& range : ranges) {
-                ++totalRangeChecks;
+            columnPosting.keys.insert(
+                columnPosting.keys.end(),
+                keys.begin(),
+                keys.end());
+        }
 
-                if (key >= range.startKey && key <= range.endKey) {
-                    if (columnKeySets[i].insert(key).second) {
-                        ++totalSelectedKeys;
+        // Keep only keys belonging to BloomTree-selected ranges.
+        std::unordered_set<std::string> selectedKeys;
+
+        const auto rangeFilterStart = Clock::now();
+
+        for (const auto& key : columnPosting.keys) {
+            for (const auto& [filename, ranges] :
+                 *columnPosting.ranges) {
+                for (const auto& range : ranges) {
+                    ++totalRangeChecks;
+
+                    if (key >= range.startKey &&
+                        key <= range.endKey) {
+                        if (selectedKeys.insert(key).second) {
+                            ++totalSelectedKeys;
+                        }
+                        break;
                     }
+                }
+
+                if (selectedKeys.find(key) != selectedKeys.end()) {
                     break;
                 }
             }
         }
-        }
 
-        // No point searching further columns if one is empty.
-        if (columnKeySets[i].empty()) {
-            spdlog::info(
-                "HashMulti diagnostics (early return): "
-                "posting keys={}, range checks={}, selected keys={}, "
-                "empty column index={}",
-                totalPostingKeys,
-                totalRangeChecks,
-                totalSelectedKeys,
-                i);
+        rangeFilterTimeUs += std::chrono::duration<double, std::micro>(
+        Clock::now() - rangeFilterStart).count();
 
-            gHashCandidateCount = 0;
-            gHashVerificationCount = 0;
-            return {};
-}
+        columnPosting.keys.assign(
+            selectedKeys.begin(),
+            selectedKeys.end());
+
+        postings.push_back(std::move(columnPosting));
     }
 
-    // 4. Intersect candidate keys from all columns.
-    std::unordered_set<std::string> result =
-        std::move(columnKeySets[0]);
+    // 4. Process the most selective columns first.
+    const auto intersectionStart = Clock::now();
 
-    for (size_t i = 1; i < n; ++i) {
-        std::unordered_set<std::string> intersection;
+    std::sort(
+        postings.begin(),
+        postings.end(),
+        [](const ColumnPostings& a, const ColumnPostings& b) {
+            return a.keys.size() < b.keys.size();
+        });
 
-        intersection.reserve(
-            std::min(result.size(), columnKeySets[i].size()));
 
-        for (const auto& key : result) {
-            if (columnKeySets[i].find(key) !=
-                columnKeySets[i].end()) {
-                intersection.insert(key);
+    spdlog::info("HashMulti posting list order:");
+
+    for (const auto& posting : postings) {
+        spdlog::info(
+            "  column={}, selected keys={}",
+            columns[posting.columnIndex],
+            posting.keys.size());
+    }
+
+    if (postings.empty() || postings.front().keys.empty()) {
+
+        intersectionTimeUs += std::chrono::duration<double, std::micro>(
+            Clock::now() - intersectionStart).count();
+        gHashCandidateCount = 0;
+        gHashVerificationCount = 0;
+        return {};
+    }
+
+    std::unordered_set<std::string> result(
+        postings.front().keys.begin(),
+        postings.front().keys.end());
+
+    for (size_t i = 1; i < postings.size(); ++i) {
+        std::unordered_set<std::string> nextKeys(
+            postings[i].keys.begin(),
+            postings[i].keys.end());
+
+        for (auto it = result.begin(); it != result.end();) {
+            if (nextKeys.find(*it) == nextKeys.end()) {
+                it = result.erase(it);
+            } else {
+                ++it;
             }
         }
-
-        result = std::move(intersection);
 
         if (result.empty()) {
             break;
@@ -407,6 +470,7 @@ inline std::vector<std::string> finalSstHashIndexAndIntersect(
     }
 
     gHashCandidateCount = result.size();
+
 
     // 5. Verify candidates against current RocksDB values.
     std::vector<std::string> verifiedResults;
@@ -434,6 +498,18 @@ inline std::vector<std::string> finalSstHashIndexAndIntersect(
 
     std::sort(verifiedResults.begin(), verifiedResults.end());
 
+    const double totalTimeUs =
+    std::chrono::duration<double, std::micro>(
+        Clock::now() - totalStart).count();
+
+        spdlog::info(
+            "HashMulti timing: lookup={:.0f} us, rangeFilter={:.0f} us, "
+            "intersection={:.0f} us, total={:.0f} us",
+            lookupTimeUs,
+            rangeFilterTimeUs,
+            intersectionTimeUs,
+            totalTimeUs);
+
     return verifiedResults;
 }
 
@@ -443,9 +519,12 @@ inline void dfsMultiColumn(
     Combo currentCombo,
     DBManager& dbManager,
     bool isInitialCall,
-    std::vector<Combo>& leafCombinations)
+    std::vector<Combo>& leafCombinations, size_t& dfsCalls, size_t& noCandidateReturns,
+    size_t& emptyRangeReturns,size_t& invalidRangeReturns)
 {
+    ++dfsCalls;
     const size_t n = currentCombo.nodes.size();
+
 
     if (n != values.size()) {
         throw std::runtime_error(
@@ -472,6 +551,7 @@ inline void dfsMultiColumn(
 
     // 2. Check common key range.
     if (currentCombo.rangeStart > currentCombo.rangeEnd) {
+        ++invalidRangeReturns;
         return;
     }
 
@@ -541,7 +621,22 @@ inline void dfsMultiColumn(
         }
 
         if (!found) {
-            return;
+            spdlog::info(
+                "HashMulti DFS: no candidates for column={}, "
+                "node={}, children={}, isLeaf={}, "
+                "range=[{}, {}], tightRange=[{}, {}]",
+                i,
+                node->filename,
+                node->children.size(),
+                node->isLeaf(),
+                node->startKey,
+                node->endKey,
+                tightStart,
+                tightEnd);
+
+                ++noCandidateReturns;
+                return;
+           
         }
 
         // Tighten the common range before processing the next column.
@@ -550,6 +645,17 @@ inline void dfsMultiColumn(
             tightEnd = std::min(tightEnd, colMax);
 
             if (tightStart > tightEnd) {
+                spdlog::info(
+                    "HashMulti DFS range: column={}, candidates={}, "
+                    "colRange=[{}, {}], tightRange=[{}, {}]",
+                    i,
+                    candidateOptions[i].size(),
+                    colMin,
+                    colMax,
+                    tightStart,
+                    tightEnd);
+
+                ++emptyRangeReturns;    
                 return;
             }
         }
@@ -580,7 +686,9 @@ inline void dfsMultiColumn(
                 std::move(next),
                 dbManager,
                 false,
-                leafCombinations);
+                leafCombinations, dfsCalls, noCandidateReturns,
+                emptyRangeReturns,
+                invalidRangeReturns);
 
             return;
         }
@@ -612,6 +720,8 @@ inline void dfsMultiColumn(
         chosen,
         currentCombo.rangeStart,
         currentCombo.rangeEnd);
+
+
 }
 
 
@@ -630,6 +740,11 @@ inline std::vector<std::string> multiColumnQueryHierarchical(
 {
     StopWatch sw;
     sw.start();
+
+    size_t dfsCalls = 0;
+    size_t noCandidateReturns = 0;
+    size_t emptyRangeReturns = 0;
+    size_t invalidRangeReturns = 0;
 
     const size_t n = trees.size();
 
@@ -677,12 +792,23 @@ inline std::vector<std::string> multiColumnQueryHierarchical(
     // Phase 1: Traverse BloomTree hierarchies.
     std::vector<Combo> leafCombinations;
 
-    dfsMultiColumn(
-        values,
-        std::move(start),
-        dbManager,
-        true,
-        leafCombinations);
+   dfsMultiColumn(
+    values,
+    std::move(start),
+    dbManager,
+    true,
+    leafCombinations,
+    dfsCalls, noCandidateReturns,
+    emptyRangeReturns,
+    invalidRangeReturns);
+
+    spdlog::info(
+        "HashMulti DFS stats: calls={}, noCandidates={}, "
+        "emptyRanges={}, invalidRanges={}",
+        dfsCalls,
+        noCandidateReturns,
+        emptyRangeReturns,
+        invalidRangeReturns);
 
     // Phase 2: Scan unique SST files and intersect results.
     std::vector<std::string> matches =
@@ -721,6 +847,11 @@ inline std::vector<std::string> multiColumnQueryHierarchicalHashIndex(
 {
     StopWatch sw;
     sw.start();
+
+    size_t dfsCalls = 0;
+    size_t noCandidateReturns = 0;
+    size_t emptyRangeReturns = 0;
+    size_t invalidRangeReturns = 0;
 
     const size_t n = trees.size();
 
@@ -774,7 +905,21 @@ inline std::vector<std::string> multiColumnQueryHierarchicalHashIndex(
         std::move(start),
         dbManager,
         true,
-        leafCombinations);
+        leafCombinations, dfsCalls, noCandidateReturns,
+        emptyRangeReturns,
+        invalidRangeReturns);
+
+    spdlog::info(
+    "HashMulti: leaf combinations found={}",
+    leafCombinations.size());
+
+    spdlog::info(
+    "HashMulti DFS stats: calls={}, noCandidates={}, "
+    "emptyRanges={}, invalidRanges={}",
+    dfsCalls,
+    noCandidateReturns,
+    emptyRangeReturns,
+    invalidRangeReturns);
 
     // Phase 2: Search hash indexes belonging to selected SST files.
     std::vector<std::string> matches =

@@ -327,10 +327,28 @@ void runExpJ1(
     }
 
     // 3. Zipfian distribution.
+
     {
         DistributionConfig config;
         config.type = DataDistribution::Zipfian;
-        config.exponent = 0.5;
+        config.exponent = 0.1;
+        config.seed = 12345;
+        configurations.push_back(config);
+    }
+
+
+    {
+        DistributionConfig config;
+        config.type = DataDistribution::Zipfian;
+        config.exponent = 0.4;
+        config.seed = 12345;
+        configurations.push_back(config);
+    }
+
+    {
+        DistributionConfig config;
+        config.type = DataDistribution::Zipfian;
+        config.exponent = 0.8;
         config.seed = 12345;
         configurations.push_back(config);
     }
